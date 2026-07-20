@@ -60,6 +60,11 @@ backend of `../family-beacon`. **Spec only, no code yet.**
   Also the test strategy: unit + system suites (both per-commit), the beaconsim
   client mockup, scenarios S1–S9. Its three surfaced open items are resolved in
   PRD 0.3.
+- `docs/Sund-Status.md` — **implementation snapshot** (what the binary actually
+  does, for consumers — chiefly family-beacon — and contributors): as-built data
+  model, the 11 implemented endpoints, auth/signing contract, push/revocation/
+  quota behavior, the sund-client contract, test coverage, and an honest
+  "not built yet" list. Ground truth of the code; the PRD stays design intent.
 - `docs/Sund-PriorArt.md` — survey (July 2026): SimpleX SMP is the closest
   incumbent; the gap Sund fills (blind transport + account/device model) is
   unoccupied. Its five design implications are incorporated in PRD 0.2.

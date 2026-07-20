@@ -6,6 +6,12 @@ tests
 *.md
 Makefile
 
+# Deployment files (not needed to build the binary)
+compose.yaml
+compose.override.*
+.env
+.env.example
+
 # Local build artifacts / data
 /sund
 /sund-*

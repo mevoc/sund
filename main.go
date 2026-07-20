@@ -6,6 +6,7 @@
 //
 //	sund serve   [--addr :5870] [--db sund.db]
 //	sund admin account create [--db sund.db] [--quota standard] [--ttl 15m] [--json]
+//	sund health  [--addr :5870]
 //	sund version
 package main
 
@@ -18,6 +19,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -43,6 +45,10 @@ func main() {
 		if err := runAdmin(os.Args[2:]); err != nil {
 			log.Fatalf("sund: %v", err)
 		}
+	case "health":
+		if err := runHealth(os.Args[2:]); err != nil {
+			log.Fatalf("sund: %v", err)
+		}
 	case "version":
 		fmt.Println(version)
 	default:
@@ -52,7 +58,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, "usage: sund <serve|admin|version> [flags]\n")
+	fmt.Fprintf(os.Stderr, "usage: sund <serve|admin|health|version> [flags]\n")
 }
 
 // envOr returns the environment variable named key, or def if it is unset or
@@ -129,5 +135,45 @@ func runAdmin(args []string) error {
 	}
 	fmt.Printf("account:    %s\n", acc.ID)
 	fmt.Printf("invitation: %s  (single-use, expires in %s)\n", token, *ttl)
+	return nil
+}
+
+// runHealth probes the server's /health endpoint and exits non-zero if it is not
+// OK. It exists so a distroless container (no shell, no curl) can still declare a
+// Docker HEALTHCHECK: ["CMD", "/sund", "health"].
+func runHealth(args []string) error {
+	fs := flag.NewFlagSet("health", flag.ExitOnError)
+	addr := fs.String("addr", envOr("SUND_ADDR", ":5870"), "server address to probe (env: SUND_ADDR)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	return checkHealth(healthURL(*addr))
+}
+
+// healthURL turns a listen address into a probe URL, filling in a loopback host
+// for the bare ":port" form the server listens on.
+func healthURL(addr string) string {
+	host := addr
+	if strings.HasPrefix(host, ":") {
+		host = "127.0.0.1" + host
+	}
+	return "http://" + host + "/health"
+}
+
+func checkHealth(url string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("unhealthy: status %d", resp.StatusCode)
+	}
 	return nil
 }

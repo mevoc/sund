@@ -1,0 +1,37 @@
+# Minimal single-service Sund deployment.
+#
+# This runs just the relay. A real self-hosting stack — a UnifiedPush distributor
+# (ntfy) for Android wake-up and a TLS-terminating reverse proxy — is a consumer
+# concern; see ../family-beacon. Sund speaks plain HTTP and must sit behind a
+# proxy for any internet-facing deployment.
+#
+# Quick start:
+#   cp .env.example .env         # then edit if you like
+#   docker compose up -d
+#   docker compose exec sund /sund admin account create   # first account + invite
+#
+# The image is private while the repo is: run `docker login ghcr.io` first, or
+# make the package public.
+
+services:
+  sund:
+    image: ${SUND_IMAGE:-ghcr.io/mevoc/sund:latest}
+    restart: unless-stopped
+    ports:
+      - "${SUND_PORT:-5870}:5870"
+    volumes:
+      - sund-data:/data
+    # The image already defaults these; shown here so the deployment is legible.
+    environment:
+      SUND_ADDR: ":5870"
+      SUND_DB: "/data/sund.db"
+    # distroless has no shell or curl, so the binary probes itself.
+    healthcheck:
+      test: ["CMD", "/sund", "health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  sund-data:

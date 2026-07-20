@@ -239,7 +239,11 @@ queue-rotation policy (client-driven vs. server-assisted).
 
 Code map
 
-    main.go                 CLI: serve, admin account create, version
+    main.go                 CLI: serve, admin account create, health, version;
+                            env-var config (SUND_ADDR/SUND_DB)
+    Dockerfile, compose.yaml, .env.example
+                            container image (distroless static, multi-arch) and a
+                            minimal single-service deployment
     internal/server/        HTTP handlers, signature middleware, wake dispatch
       server.go             routes, config
       auth.go               signature extract/verify, nonce cache

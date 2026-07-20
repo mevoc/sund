@@ -30,6 +30,12 @@ __pycache__/
 .claude/settings.local.json
 .claude/*.tmp.*
 
+# --- Deployment ---
+# Local compose overrides / env; .env.example is committed as the template.
+.env
+compose.override.yaml
+compose.override.yml
+
 # --- Editor / OS ---
 .DS_Store
 *.swp

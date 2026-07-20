@@ -104,11 +104,23 @@ still wins:
 
 CI builds a multi-arch (amd64/arm64) image on every push to `main` and publishes
 it to the GitHub Container Registry. It is a distroless, non-root static binary;
-the database lives on the `/data` volume.
+the database lives on the `/data` volume. `sund health` probes `/health` and
+exits non-zero if the server is down, so the image can declare a healthcheck
+despite having no shell.
+
+The repo ships a minimal single-service [`compose.yaml`](compose.yaml) and
+[`.env.example`](.env.example):
+
+```sh
+cp .env.example .env          # optional: set SUND_IMAGE / SUND_PORT
+docker compose up -d
+docker compose exec sund /sund admin account create   # first account + invite
+```
+
+Or run it directly:
 
 ```sh
 docker run -d --name sund -p 5870:5870 -v sund-data:/data ghcr.io/mevoc/sund:latest
-# create the first account (prints an invitation token):
 docker exec sund /sund admin account create
 ```
 

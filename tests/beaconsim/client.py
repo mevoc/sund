@@ -9,16 +9,19 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import secrets
 from datetime import datetime, timezone
 
 import httpx
+from nacl.public import PrivateKey, PublicKey, SealedBox
 from nacl.signing import SigningKey
 
 HEADER_DEVICE_ID = "Sund-Device-Id"
 HEADER_TIMESTAMP = "Sund-Timestamp"
 HEADER_NONCE = "Sund-Nonce"
 HEADER_SIGNATURE = "Sund-Signature"
+HEADER_SENDER_KEY = "Sund-Sender-Key"
 
 
 def _now_rfc3339() -> str:
@@ -29,6 +32,21 @@ def _now_rfc3339() -> str:
 def signing_string(method: str, path: str, timestamp: str, nonce: str, body: bytes) -> bytes:
     body_hash = hashlib.sha256(body).hexdigest()
     return "\n".join([method, path, timestamp, nonce, body_hash]).encode()
+
+
+def sign_headers(signing_key: SigningKey, method: str, path: str, body: bytes) -> dict[str, str]:
+    """Build the timestamp/nonce/signature headers for a signed request.
+
+    Used by both planes; the management plane adds a device-id header on top.
+    """
+    ts = _now_rfc3339()
+    nonce = secrets.token_hex(16)
+    sig = signing_key.sign(signing_string(method, path, ts, nonce, body)).signature
+    return {
+        HEADER_TIMESTAMP: ts,
+        HEADER_NONCE: nonce,
+        HEADER_SIGNATURE: base64.b64encode(sig).decode(),
+    }
 
 
 class Client:
@@ -44,14 +62,9 @@ class Client:
         return base64.b64encode(bytes(self.signing_key.verify_key)).decode()
 
     def _headers(self, method: str, path: str, body: bytes) -> dict[str, str]:
-        ts = _now_rfc3339()
-        nonce = secrets.token_hex(16)
-        sig = self.signing_key.sign(signing_string(method, path, ts, nonce, body)).signature
         return {
             HEADER_DEVICE_ID: self.device_id,
-            HEADER_TIMESTAMP: ts,
-            HEADER_NONCE: nonce,
-            HEADER_SIGNATURE: base64.b64encode(sig).decode(),
+            **sign_headers(self.signing_key, method, path, body),
         }
 
     def _request(self, method: str, path: str, body: bytes = b"") -> httpx.Response:
@@ -75,6 +88,95 @@ class Client:
         r = self._request("POST", "/v1/invitations")
         r.raise_for_status()
         return r.json()["invitation_token"]
+
+    def create_queue(self) -> "Queue":
+        """Create a blind queue owned by this device.
+
+        Generates two fresh per-queue keys: an Ed25519 auth key that signs
+        recv/ack/retire, and an X25519 key whose public half is handed to the
+        sender out of band so it can encrypt payloads only this device can read.
+        """
+        auth_key = SigningKey.generate()
+        enc_key = PrivateKey.generate()
+        body = json.dumps(
+            {"recipient_key": base64.b64encode(bytes(auth_key.verify_key)).decode()}
+        ).encode()
+        r = self._request("POST", "/v1/queues", body)
+        r.raise_for_status()
+        data = r.json()
+        return Queue(self.base_url, data["recipient_id"], data["sender_id"], auth_key, enc_key)
+
+
+class Queue:
+    """The owner (recipient) side of a blind queue."""
+
+    def __init__(self, base_url: str, recipient_id: str, sender_id: str,
+                 auth_key: SigningKey, enc_key: PrivateKey):
+        self.base_url = base_url.rstrip("/")
+        self.recipient_id = recipient_id
+        self.sender_id = sender_id
+        self.auth_key = auth_key
+        self.enc_key = enc_key
+
+    @property
+    def encryption_public_key(self) -> bytes:
+        """The X25519 public key a sender encrypts payloads to (shared out of band)."""
+        return bytes(self.enc_key.public_key)
+
+    def _request(self, method: str, path: str, body: bytes = b"") -> httpx.Response:
+        return httpx.request(
+            method,
+            self.base_url + path,
+            headers=sign_headers(self.auth_key, method, path, body),
+            content=body,
+        )
+
+    def recv(self) -> list[dict]:
+        """Drain the queue, decrypting each payload locally."""
+        r = self._request("GET", f"/v1/recv/{self.recipient_id}")
+        r.raise_for_status()
+        box = SealedBox(self.enc_key)
+        return [
+            {"id": m["id"], "plaintext": box.decrypt(base64.b64decode(m["payload"]))}
+            for m in r.json()["messages"]
+        ]
+
+    def ack(self, ids: list[str]) -> int:
+        body = json.dumps({"ids": ids}).encode()
+        r = self._request("POST", f"/v1/ack/{self.recipient_id}", body)
+        r.raise_for_status()
+        return r.json()["deleted"]
+
+    def retire(self) -> None:
+        r = self._request("POST", f"/v1/retire/{self.recipient_id}")
+        r.raise_for_status()
+
+
+class Sender:
+    """The sending side of a blind queue: it knows only the sender id and the
+    recipient's encryption public key, both handed over out of band. Its per-queue
+    key is bound on the first send."""
+
+    def __init__(self, base_url: str, sender_id: str, recipient_enc_pubkey: bytes):
+        self.base_url = base_url.rstrip("/")
+        self.sender_id = sender_id
+        self._box = SealedBox(PublicKey(recipient_enc_pubkey))
+        self._key = SigningKey.generate()
+        self._bound = False
+
+    def send(self, plaintext: bytes, ttl: int = 60) -> str:
+        ciphertext = bytes(self._box.encrypt(plaintext))
+        body = json.dumps(
+            {"payload": base64.b64encode(ciphertext).decode(), "ttl": ttl}
+        ).encode()
+        path = f"/v1/send/{self.sender_id}"
+        headers = sign_headers(self._key, "POST", path, body)
+        if not self._bound:
+            headers[HEADER_SENDER_KEY] = base64.b64encode(bytes(self._key.verify_key)).decode()
+        r = httpx.post(self.base_url + path, headers=headers, content=body)
+        r.raise_for_status()
+        self._bound = True
+        return r.json()["message_id"]
 
 
 def register_device(

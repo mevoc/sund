@@ -60,6 +60,14 @@ func New(cfg Config, st *store.Store) *Server {
 	// Signed management-plane routes.
 	mux.Handle("GET /v1/devices", s.requireSignature(http.HandlerFunc(s.handleListDevices)))
 	mux.Handle("POST /v1/invitations", s.requireSignature(http.HandlerFunc(s.handleCreateInvitation)))
+	// Queue creation is the plane meeting point: signed by device identity so
+	// the server records ownership (quota + wake-up).
+	mux.Handle("POST /v1/queues", s.requireSignature(http.HandlerFunc(s.handleCreateQueue)))
+	// Transport-plane routes: authenticated by per-queue keys, no device id.
+	mux.HandleFunc("POST /v1/send/{sender_id}", s.handleSend)
+	mux.HandleFunc("GET /v1/recv/{recipient_id}", s.handleRecv)
+	mux.HandleFunc("POST /v1/ack/{recipient_id}", s.handleAck)
+	mux.HandleFunc("POST /v1/retire/{recipient_id}", s.handleRetire)
 	s.handler = mux
 	return s
 }

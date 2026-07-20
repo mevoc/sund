@@ -25,6 +25,11 @@ const (
 	HeaderTimestamp = "Sund-Timestamp"
 	HeaderNonce     = "Sund-Nonce"
 	HeaderSignature = "Sund-Signature"
+
+	// HeaderSenderKey carries the sender's per-queue Ed25519 public key on the
+	// first SEND to an open queue, so the server can bind and thereafter verify
+	// it (transport plane). Absent once the queue is bound.
+	HeaderSenderKey = "Sund-Sender-Key"
 )
 
 // SigningString builds the exact byte sequence a client signs and the server

@@ -129,6 +129,34 @@ CREATE TABLE IF NOT EXISTS devices (
   revoked       INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_devices_account ON devices(account_id);
+
+-- A queue is a unidirectional channel owned by one recipient device. The two
+-- ids are unrelated random handles: recipient_id reads/acks, sender_id sends.
+-- recipient_key is supplied at creation; sender_key is NULL until the first
+-- valid SEND binds it (SimpleX "open queue" pattern). owner_device is the sole
+-- point where the transport plane meets device identity (quota + wake-up); no
+-- column ever links a sender to a queue.
+CREATE TABLE IF NOT EXISTS queues (
+  recipient_id  TEXT PRIMARY KEY,
+  sender_id     TEXT NOT NULL UNIQUE,
+  owner_device  TEXT NOT NULL REFERENCES devices(id),
+  recipient_key BLOB NOT NULL,
+  sender_key    BLOB,
+  created       TEXT NOT NULL,
+  retired       INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_queues_sender ON queues(sender_id);
+CREATE INDEX IF NOT EXISTS idx_queues_owner ON queues(owner_device);
+
+CREATE TABLE IF NOT EXISTS messages (
+  id          TEXT PRIMARY KEY,
+  queue_id    TEXT NOT NULL REFERENCES queues(recipient_id),
+  payload     BLOB NOT NULL,
+  received_at TEXT NOT NULL,
+  expires     TEXT NOT NULL,
+  status      TEXT NOT NULL DEFAULT 'stored'
+);
+CREATE INDEX IF NOT EXISTS idx_messages_queue ON messages(queue_id);
 `
 
 func migrate(db *sql.DB) error {

@@ -13,20 +13,29 @@ interprets them. (Working name.)
 
 ## Status
 
-Early. The first management-plane slice is in place; the transport plane
-(pseudonymous queues, send/recv) is next. Implemented endpoints:
+Both planes have a working first slice; push wake-up and per-account storage
+quota are next. Implemented endpoints:
 
-| Method & path              | Auth                 | Purpose                              |
-| -------------------------- | -------------------- | ------------------------------------ |
-| `GET /health`              | none                 | liveness                             |
-| `POST /v1/devices/register`| one-time token       | enroll a device (bootstrap)          |
-| `GET /v1/devices`          | Ed25519 signature    | list the account's devices           |
-| `POST /v1/invitations`     | Ed25519 signature    | mint a token to pair another device  |
+| Method & path               | Auth                | Purpose                              |
+| --------------------------- | ------------------- | ------------------------------------ |
+| `GET /health`               | none                | liveness                             |
+| `POST /v1/devices/register` | one-time token      | enroll a device (bootstrap)          |
+| `GET /v1/devices`           | device signature    | list the account's devices           |
+| `POST /v1/invitations`      | device signature    | mint a token to pair another device  |
+| `POST /v1/queues`           | device signature    | create a blind queue you own         |
+| `POST /v1/send/{sender_id}` | per-queue sender key | append an encrypted message          |
+| `GET /v1/recv/{recipient_id}` | per-queue recipient key | drain your queue                  |
+| `POST /v1/ack/{recipient_id}` | per-queue recipient key | delete acknowledged messages      |
+| `POST /v1/retire/{recipient_id}` | per-queue recipient key | retire a queue (rotation)      |
 
-Signed requests carry `Sund-Device-Id`, `Sund-Timestamp`, `Sund-Nonce` and
-`Sund-Signature` headers; the signature covers method, path, timestamp, nonce
-and a hash of the body (see `internal/sigauth`). Accounts are provisioned by the
-operator with `sund admin account create`.
+**Management plane** requests are signed by the device's Ed25519 identity key and
+carry a `Sund-Device-Id` header. **Transport-plane** requests carry no device
+identity — they are signed by a per-queue key and addressed only by the queue's
+random recipient/sender ids, so the server never records who sends to whom. A
+queue is created "open"; the first valid `send` binds the sender's key
+(`Sund-Sender-Key`), SimpleX-style. Every signed request covers method, path,
+timestamp, nonce and a hash of the body (see `internal/sigauth`); payloads are
+opaque ciphertext. Accounts are provisioned with `sund admin account create`.
 
 ## Stack
 

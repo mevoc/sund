@@ -39,7 +39,7 @@ def test_second_device_appears_in_list(sund_server, new_account):
     # One account; the first device invites a second (Walkthrough 2, step 1).
     _, token_a = new_account()
     client_a = beaconsim.register_device(sund_server.base_url, token_a)
-    token_b = client_a.create_invitation()
+    token_b = client_a.create_invitation().token
     client_b = beaconsim.register_device(sund_server.base_url, token_b)
 
     ids_seen_by_a = {d["id"] for d in client_a.list_devices()}

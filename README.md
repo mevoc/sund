@@ -25,6 +25,8 @@ queue-rotation policy). Implemented endpoints:
 | `GET /v1/devices`           | device signature    | list the account's devices           |
 | `POST /v1/devices/{id}/revoke` | device signature | revoke a device (kills it + its queues) |
 | `POST /v1/invitations`      | device signature    | mint a token to pair another device  |
+| `GET /v1/invitations`       | device signature    | list outstanding invitations         |
+| `POST /v1/invitations/{id}/revoke` | device signature | revoke an invitation before use   |
 | `PUT /v1/me/push`           | device signature    | register this device's wake-up endpoint |
 | `POST /v1/queues`           | device signature    | create a blind queue you own         |
 | `POST /v1/send/{sender_id}` | per-queue sender key | append an encrypted message          |

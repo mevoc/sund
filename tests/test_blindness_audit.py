@@ -32,8 +32,8 @@ def test_blindness_audit(sund_server, new_account, push_sink):
     # Account with three devices; A carries a push endpoint.
     _, token_a = new_account()
     a = beaconsim.register_device(base, token_a, push_endpoint=push_sink.url())
-    b = beaconsim.register_device(base, a.create_invitation())
-    c = beaconsim.register_device(base, a.create_invitation())
+    b = beaconsim.register_device(base, a.create_invitation().token)
+    c = beaconsim.register_device(base, a.create_invitation().token)
 
     # Duplex-ish: A owns a queue B sends into; B owns a queue A sends into.
     q_a = a.create_queue()  # owner A, sender B

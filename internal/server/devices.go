@@ -117,12 +117,14 @@ func toDeviceView(d store.Device) deviceView {
 
 type invitationResponse struct {
 	InvitationToken string `json:"invitation_token"`
+	InvitationID    string `json:"invitation_id"`
 	Expires         string `json:"expires"`
 }
 
 // handleCreateInvitation mints a single-use enrollment token for the caller's
 // account (implementation guide, Walkthrough 2, step 1). Signed: only an
-// existing device may invite another into its account.
+// existing device may invite another into its account. The response carries the
+// non-secret invitation id so the caller can later list or revoke it.
 func (s *Server) handleCreateInvitation(w http.ResponseWriter, r *http.Request) {
 	dev, ok := deviceFromContext(r.Context())
 	if !ok {
@@ -130,7 +132,7 @@ func (s *Server) handleCreateInvitation(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	token, expires, err := s.store.CreateInvitation(r.Context(), dev.AccountID, defaultInvitationTTL)
+	token, inv, err := s.store.CreateInvitation(r.Context(), dev.AccountID, defaultInvitationTTL)
 	if err != nil {
 		log.Printf("create invitation: %v", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
@@ -138,8 +140,61 @@ func (s *Server) handleCreateInvitation(w http.ResponseWriter, r *http.Request) 
 	}
 	writeJSON(w, http.StatusCreated, invitationResponse{
 		InvitationToken: token,
-		Expires:         expires.UTC().Format(time.RFC3339),
+		InvitationID:    inv.ID,
+		Expires:         inv.Expires.UTC().Format(time.RFC3339),
 	})
+}
+
+type invitationView struct {
+	ID      string `json:"id"`
+	Created string `json:"created"`
+	Expires string `json:"expires"`
+}
+
+// handleListInvitations returns the account's outstanding (unconsumed,
+// unrevoked, unexpired) invitations. Tokens are never included.
+func (s *Server) handleListInvitations(w http.ResponseWriter, r *http.Request) {
+	dev, ok := deviceFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	invs, err := s.store.ListInvitations(r.Context(), dev.AccountID)
+	if err != nil {
+		log.Printf("list invitations: %v", err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	views := make([]invitationView, len(invs))
+	for i, inv := range invs {
+		views[i] = invitationView{
+			ID:      inv.ID,
+			Created: inv.Created.UTC().Format(time.RFC3339),
+			Expires: inv.Expires.UTC().Format(time.RFC3339),
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"invitations": views})
+}
+
+// handleRevokeInvitation kills a mis-shared invitation before it is used. Scoped
+// to the caller's account; an unknown or already-dead invitation 404s.
+func (s *Server) handleRevokeInvitation(w http.ResponseWriter, r *http.Request) {
+	dev, ok := deviceFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	revoked, err := s.store.RevokeInvitation(r.Context(), dev.AccountID, r.PathValue("id"))
+	if err != nil {
+		log.Printf("revoke invitation: %v", err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if !revoked {
+		writeError(w, http.StatusNotFound, "no such invitation")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"revoked": true})
 }
 
 // handleListDevices returns every device in the caller's account. The public

@@ -58,7 +58,7 @@ def test_device_list_change_pings_existing_device(sund_server, new_account, push
     a = beaconsim.register_device(sund_server.base_url, token, push_endpoint=push_sink.url())
 
     # A second device joins A's account; A must be woken to refetch the list.
-    token_b = a.create_invitation()
+    token_b = a.create_invitation().token
     beaconsim.register_device(sund_server.base_url, token_b)
 
     assert push_sink.wait_for(1), "existing device not pinged on new registration"

@@ -128,6 +128,117 @@ func TestListDevices(t *testing.T) {
 	}
 }
 
+func TestListInvitationsOutstandingOnly(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	acc, err := st.CreateAccount(ctx, "standard", 0)
+	if err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+
+	// One live, one expired, one that gets consumed.
+	_, live, err := st.CreateInvitation(ctx, acc.ID, 15*time.Minute)
+	if err != nil {
+		t.Fatalf("CreateInvitation live: %v", err)
+	}
+	if _, _, err := st.CreateInvitation(ctx, acc.ID, -1*time.Minute); err != nil {
+		t.Fatalf("CreateInvitation expired: %v", err)
+	}
+	consumedToken, _, err := st.CreateInvitation(ctx, acc.ID, 15*time.Minute)
+	if err != nil {
+		t.Fatalf("CreateInvitation consumed: %v", err)
+	}
+	if _, err := st.RegisterDevice(ctx, consumedToken, randKey(t), "", ""); err != nil {
+		t.Fatalf("RegisterDevice: %v", err)
+	}
+
+	invs, err := st.ListInvitations(ctx, acc.ID)
+	if err != nil {
+		t.Fatalf("ListInvitations: %v", err)
+	}
+	if len(invs) != 1 || invs[0].ID != live.ID {
+		t.Fatalf("outstanding = %+v, want only the live invitation %q", invs, live.ID)
+	}
+}
+
+func TestRevokeInvitationBlocksRegistration(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	acc, err := st.CreateAccount(ctx, "standard", 0)
+	if err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	token, inv, err := st.CreateInvitation(ctx, acc.ID, 15*time.Minute)
+	if err != nil {
+		t.Fatalf("CreateInvitation: %v", err)
+	}
+
+	revoked, err := st.RevokeInvitation(ctx, acc.ID, inv.ID)
+	if err != nil {
+		t.Fatalf("RevokeInvitation: %v", err)
+	}
+	if !revoked {
+		t.Fatal("revoke should have taken effect")
+	}
+
+	// The revoked token cannot enroll a device.
+	if _, err := st.RegisterDevice(ctx, token, randKey(t), "", ""); !errors.Is(err, ErrInvalidInvitation) {
+		t.Fatalf("register with revoked token err = %v, want ErrInvalidInvitation", err)
+	}
+	// It is no longer listed.
+	if invs, _ := st.ListInvitations(ctx, acc.ID); len(invs) != 0 {
+		t.Fatalf("revoked invitation still listed: %+v", invs)
+	}
+}
+
+func TestRevokeInvitationIsAccountScoped(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	accA, err := st.CreateAccount(ctx, "standard", 0)
+	if err != nil {
+		t.Fatalf("CreateAccount A: %v", err)
+	}
+	accB, err := st.CreateAccount(ctx, "standard", 0)
+	if err != nil {
+		t.Fatalf("CreateAccount B: %v", err)
+	}
+	_, inv, err := st.CreateInvitation(ctx, accA.ID, 15*time.Minute)
+	if err != nil {
+		t.Fatalf("CreateInvitation: %v", err)
+	}
+
+	// Account B cannot revoke account A's invitation.
+	revoked, err := st.RevokeInvitation(ctx, accB.ID, inv.ID)
+	if err != nil {
+		t.Fatalf("RevokeInvitation: %v", err)
+	}
+	if revoked {
+		t.Fatal("an invitation must not be revocable from another account")
+	}
+	if invs, _ := st.ListInvitations(ctx, accA.ID); len(invs) != 1 {
+		t.Fatalf("account A's invitation should be untouched, got %+v", invs)
+	}
+}
+
+func TestRevokeInvitationTwiceIsNoop(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	acc, err := st.CreateAccount(ctx, "standard", 0)
+	if err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	_, inv, err := st.CreateInvitation(ctx, acc.ID, 15*time.Minute)
+	if err != nil {
+		t.Fatalf("CreateInvitation: %v", err)
+	}
+	if ok, _ := st.RevokeInvitation(ctx, acc.ID, inv.ID); !ok {
+		t.Fatal("first revoke should succeed")
+	}
+	if ok, _ := st.RevokeInvitation(ctx, acc.ID, inv.ID); ok {
+		t.Fatal("second revoke should report no change")
+	}
+}
+
 func TestGetDeviceNotFound(t *testing.T) {
 	st := newStore(t)
 	_, err := st.GetDevice(context.Background(), "dev_nope")

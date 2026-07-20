@@ -9,8 +9,11 @@ which is why the request-signing canonical form lives here in Python and must
 match internal/sigauth byte-for-byte.
 """
 
-from .client import Client, Queue, Sender, register_device, signing_string
+from .client import Client, Invitation, Queue, Sender, register_device, signing_string
 
-__all__ = ["Client", "Queue", "Sender", "register_device", "signing_string", "__version__"]
+__all__ = [
+    "Client", "Invitation", "Queue", "Sender",
+    "register_device", "signing_string", "__version__",
+]
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"

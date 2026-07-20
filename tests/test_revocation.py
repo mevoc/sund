@@ -14,7 +14,7 @@ def _account_with_two_devices(sund_server, new_account, push_sink):
     """A (with a push endpoint) and B, in one account. Returns (a, b)."""
     _, token = new_account()
     a = beaconsim.register_device(sund_server.base_url, token, push_endpoint=push_sink.url())
-    token_b = a.create_invitation()
+    token_b = a.create_invitation().token
     b = beaconsim.register_device(sund_server.base_url, token_b)
     # Drain the ping from B's registration so later assertions see only revoke.
     push_sink.wait_for(1)

@@ -11,11 +11,22 @@ import base64
 import hashlib
 import json
 import secrets
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import httpx
 from nacl.public import PrivateKey, PublicKey, SealedBox
 from nacl.signing import SigningKey
+
+
+@dataclass
+class Invitation:
+    """A freshly minted invitation: the secret token, plus the non-secret id and
+    expiry used to list or revoke it later."""
+
+    token: str
+    id: str
+    expires: str
 
 HEADER_DEVICE_ID = "Sund-Device-Id"
 HEADER_TIMESTAMP = "Sund-Timestamp"
@@ -83,11 +94,27 @@ class Client:
         r.raise_for_status()
         return r.json()["devices"]
 
-    def create_invitation(self) -> str:
+    def create_invitation(self) -> Invitation:
         """Mint a single-use token to pair another device into this account."""
         r = self._request("POST", "/v1/invitations")
         r.raise_for_status()
-        return r.json()["invitation_token"]
+        data = r.json()
+        return Invitation(
+            token=data["invitation_token"],
+            id=data["invitation_id"],
+            expires=data["expires"],
+        )
+
+    def list_invitations(self) -> list[dict]:
+        """Return the account's outstanding invitations (ids and expiries)."""
+        r = self._request("GET", "/v1/invitations")
+        r.raise_for_status()
+        return r.json()["invitations"]
+
+    def revoke_invitation(self, invitation_id: str) -> None:
+        """Kill a mis-shared invitation before it is used."""
+        r = self._request("POST", f"/v1/invitations/{invitation_id}/revoke")
+        r.raise_for_status()
 
     def set_push_endpoint(self, endpoint: str) -> None:
         """Register this device's wake-up endpoint (e.g. a UnifiedPush URL)."""

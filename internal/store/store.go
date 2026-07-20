@@ -115,13 +115,19 @@ CREATE TABLE IF NOT EXISTS accounts (
   status      TEXT NOT NULL DEFAULT 'active',
   quota_bytes INTEGER NOT NULL DEFAULT 0
 );
+-- id is a non-secret handle for listing and revoking an invitation; the token
+-- itself is never stored (only its hash) or returned after minting. revoked
+-- lets an authorized device kill a mis-shared invitation before it is used.
 CREATE TABLE IF NOT EXISTS invitations (
   token_hash TEXT PRIMARY KEY,
+  id         TEXT NOT NULL DEFAULT '',
   account_id TEXT NOT NULL REFERENCES accounts(id),
   created    TEXT NOT NULL,
   expires    TEXT NOT NULL,
-  consumed   INTEGER NOT NULL DEFAULT 0
+  consumed   INTEGER NOT NULL DEFAULT 0,
+  revoked    INTEGER NOT NULL DEFAULT 0
 );
+CREATE INDEX IF NOT EXISTS idx_invitations_account ON invitations(account_id);
 CREATE TABLE IF NOT EXISTS devices (
   id            TEXT PRIMARY KEY,
   account_id    TEXT NOT NULL REFERENCES accounts(id),
@@ -172,9 +178,20 @@ func migrate(db *sql.DB) error {
 	if _, err := db.Exec(schema); err != nil {
 		return err
 	}
-	// quota_bytes was added after the first accounts schema; add it to databases
-	// created before it existed (a no-op on fresh ones).
-	return ensureColumn(db, "accounts", "quota_bytes", "INTEGER NOT NULL DEFAULT 0")
+	// Columns added after their table's first schema; ensureColumn is a no-op on
+	// fresh databases and backfills older ones.
+	if err := ensureColumn(db, "accounts", "quota_bytes", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := ensureColumn(db, "invitations", "id", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := ensureColumn(db, "invitations", "revoked", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	// Index on invitations.id must come after the column is guaranteed to exist.
+	_, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_invitations_id ON invitations(id)`)
+	return err
 }
 
 // ensureColumn adds column to table with the given DDL if it is not already
@@ -249,25 +266,91 @@ func (s *Store) CreateAccount(ctx context.Context, quotaClass string, quotaBytes
 	return &Account{ID: id, Created: t, Quota: quotaClass, Status: "active", QuotaBytes: quotaBytes}, nil
 }
 
+// Invitation is a pending enrollment invitation, identified by a non-secret id.
+// The plaintext token is never part of this struct.
+type Invitation struct {
+	ID        string
+	AccountID string
+	Created   time.Time
+	Expires   time.Time
+}
+
 // CreateInvitation mints a single-use enrollment token for accountID, valid for
 // ttl. The plaintext token is returned once (to be shown to the operator or
-// handed to a pairing device); only its hash is stored. The expiry is returned
-// so callers can report it.
-func (s *Store) CreateInvitation(ctx context.Context, accountID string, ttl time.Duration) (token string, expires time.Time, err error) {
+// handed to a pairing device); only its hash is stored. The returned Invitation
+// carries the non-secret id (for later listing/revoking) and the expiry.
+func (s *Store) CreateInvitation(ctx context.Context, accountID string, ttl time.Duration) (token string, inv *Invitation, err error) {
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
-		return "", time.Time{}, err
+		return "", nil, err
 	}
 	token = base64.RawURLEncoding.EncodeToString(raw)
-	now := time.Now().UTC()
-	expires = now.Add(ttl)
-	if _, err := s.db.ExecContext(ctx,
-		`INSERT INTO invitations (token_hash, account_id, created, expires, consumed) VALUES (?, ?, ?, ?, 0)`,
-		hashToken(token), accountID, now.Format(time.RFC3339), expires.Format(time.RFC3339),
-	); err != nil {
-		return "", time.Time{}, err
+	id, err := newID("inv_")
+	if err != nil {
+		return "", nil, err
 	}
-	return token, expires, nil
+	now := time.Now().UTC()
+	expires := now.Add(ttl)
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO invitations (token_hash, id, account_id, created, expires, consumed, revoked)
+		 VALUES (?, ?, ?, ?, ?, 0, 0)`,
+		hashToken(token), id, accountID, now.Format(time.RFC3339), expires.Format(time.RFC3339),
+	); err != nil {
+		return "", nil, err
+	}
+	return token, &Invitation{
+		ID: id, AccountID: accountID,
+		Created: now.Truncate(time.Second), Expires: expires.Truncate(time.Second),
+	}, nil
+}
+
+// ListInvitations returns an account's outstanding invitations: not consumed,
+// not revoked, and not yet expired — the set a client can still act on.
+func (s *Store) ListInvitations(ctx context.Context, accountID string) ([]Invitation, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, account_id, created, expires FROM invitations
+		  WHERE account_id=? AND consumed=0 AND revoked=0 AND expires>?
+		  ORDER BY created, id`,
+		accountID, nowStr(),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []Invitation
+	for rows.Next() {
+		var (
+			inv              Invitation
+			created, expires string
+		)
+		if err := rows.Scan(&inv.ID, &inv.AccountID, &created, &expires); err != nil {
+			return nil, err
+		}
+		inv.Created, _ = time.Parse(time.RFC3339, created)
+		inv.Expires, _ = time.Parse(time.RFC3339, expires)
+		out = append(out, inv)
+	}
+	return out, rows.Err()
+}
+
+// RevokeInvitation marks an unconsumed invitation revoked so it can no longer be
+// used, scoped to accountID for tenant isolation. It reports whether a live
+// invitation was actually revoked (false = unknown id, wrong account, already
+// consumed, or already revoked).
+func (s *Store) RevokeInvitation(ctx context.Context, accountID, id string) (bool, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE invitations SET revoked=1 WHERE id=? AND account_id=? AND consumed=0 AND revoked=0`,
+		id, accountID,
+	)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n == 1, nil
 }
 
 // RegisterDevice atomically consumes the invitation named by token and enrolls a
@@ -287,7 +370,7 @@ func (s *Store) RegisterDevice(ctx context.Context, token string, pub ed25519.Pu
 	now := nowStr()
 	hash := hashToken(token)
 	res, err := tx.ExecContext(ctx,
-		`UPDATE invitations SET consumed=1 WHERE token_hash=? AND consumed=0 AND expires > ?`,
+		`UPDATE invitations SET consumed=1 WHERE token_hash=? AND consumed=0 AND revoked=0 AND expires > ?`,
 		hash, now,
 	)
 	if err != nil {

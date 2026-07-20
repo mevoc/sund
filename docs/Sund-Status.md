@@ -21,8 +21,8 @@ At a glance
 - Tests: a Go unit suite and a Python system suite (`beaconsim`) that drives the
   real compiled binary with real crypto. ~49 Go cases, ~29 system tests, both
   per-commit. Includes the blindness audit (S8) and operator-survival (S9).
-- Not yet built: key bundles, invitation listing/revoke-before-use, iOS push
-  provider, in-binary TLS / fingerprint pinning, metrics. See "Not built yet".
+- Not yet built: key bundles, iOS push provider, in-binary TLS / fingerprint
+  pinning, metrics. See "Not built yet".
 
 ---
 
@@ -78,6 +78,8 @@ HTTP API (implemented endpoints)
     GET  /v1/devices                   device signature        list account devices
     POST /v1/devices/{id}/revoke       device signature        revoke a device
     POST /v1/invitations               device signature        mint a pairing token
+    GET  /v1/invitations               device signature        list outstanding invitations
+    POST /v1/invitations/{id}/revoke   device signature        revoke before use
     PUT  /v1/me/push                   device signature        set wake-up endpoint
     POST /v1/queues                    device signature        create a blind queue
     POST /v1/send/{sender_id}          per-queue sender key     append a message
@@ -139,6 +141,12 @@ Behavior details a consumer should know
   exceed `quota_bytes` is refused with 507; space frees as messages are acked or
   expire. Set via `sund admin account create --quota-bytes N` or a named class
   (standard = 64 MiB, large = 1 GiB). 0 = unlimited.
+- Invitations: single-use, default 15-minute TTL, atomically consumed by the
+  first registration. Minting returns a non-secret invitation id alongside the
+  token; a device can list its account's outstanding (unconsumed, unrevoked,
+  unexpired) invitations and revoke one by id before it is used — the stolen-QR
+  mitigation. The token itself is never stored (only its hash) or returned by the
+  listing.
 - Multi-tenancy: accounts are isolated. Cross-account reads/sends/revokes fail.
 
 ---
@@ -215,8 +223,6 @@ Not built yet (relative to the PRD / API sketch)
 - Key bundles: `PUT /v1/me/bundle`, `GET /v1/devices/{id}/bundle` — the opaque
   dead-drop for async X3DH prekeys. Table not present. (PRD: revisit when a
   consumer needs it.)
-- Invitations: minting and single-use consumption exist; listing outstanding
-  invitations and revoking one before use do not.
 - In-binary TLS and the `sund://host:port#fingerprint` address / QR pinning: the
   binary serves plain HTTP; TLS + fingerprint pinning are expected at the reverse
   proxy and on the client, not yet produced or verified by Sund itself.

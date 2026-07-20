@@ -13,9 +13,9 @@ interprets them. (Working name.)
 
 ## Status
 
-Both planes work, with push wake-up and device revocation wired in; per-account
-storage quota and the standalone blindness/operator audits are next. Implemented
-endpoints:
+Both planes work, with push wake-up and device revocation wired in, and the
+blindness (S8) and operator-survival (S9) audits pass; per-account storage quota
+is the main feature still open. Implemented endpoints:
 
 | Method & path               | Auth                | Purpose                              |
 | --------------------------- | ------------------- | ------------------------------------ |

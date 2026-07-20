@@ -7,17 +7,26 @@ it ever stops being cheap, that is itself a regression worth catching (see
 docs/Sund-ImplementationGuide.md, Testing).
 """
 
+import json
 import os
 import shutil
 import socket
 import subprocess
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+@dataclass
+class SundServer:
+    base_url: str
+    db_path: Path
+    binary: Path
 
 
 def _go_binary() -> str:
@@ -45,11 +54,10 @@ def sund_binary(tmp_path_factory) -> Path:
 
 
 @pytest.fixture
-def sund_server(sund_binary, tmp_path):
-    """Start the compiled binary on a random port; yield its base URL."""
+def sund_server(sund_binary, tmp_path) -> SundServer:
+    """Start the compiled binary on a random port; yield connection details."""
     port = _free_port()
     addr = f"127.0.0.1:{port}"
-    base_url = f"http://{addr}"
     db_path = tmp_path / "sund.db"
 
     proc = subprocess.Popen(
@@ -57,15 +65,43 @@ def sund_server(sund_binary, tmp_path):
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )
+    server = SundServer(base_url=f"http://{addr}", db_path=db_path, binary=sund_binary)
     try:
-        _wait_until_ready(base_url, proc)
-        yield base_url
+        _wait_until_ready(server.base_url, proc)
+        yield server
     finally:
         proc.terminate()
         try:
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             proc.kill()
+
+
+@pytest.fixture
+def new_account(sund_server):
+    """Return a factory that provisions an account via the admin CLI.
+
+    Exercises the real operator surface (`sund admin account create`) against
+    the same database file the running server uses, and returns
+    (account_id, invitation_token).
+    """
+
+    def _make(quota: str = "standard") -> tuple[str, str]:
+        proc = subprocess.run(
+            [
+                str(sund_server.binary), "admin", "account", "create",
+                "--db", str(sund_server.db_path),
+                "--quota", quota,
+                "--json",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        data = json.loads(proc.stdout)
+        return data["account_id"], data["invitation_token"]
+
+    return _make
 
 
 def _wait_until_ready(base_url: str, proc: subprocess.Popen, timeout: float = 10.0):

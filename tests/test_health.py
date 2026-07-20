@@ -10,7 +10,7 @@ import beaconsim
 
 
 def test_health_ok(sund_server):
-    r = httpx.get(f"{sund_server}/health")
+    r = httpx.get(f"{sund_server.base_url}/health")
     assert r.status_code == 200
 
     body = r.json()

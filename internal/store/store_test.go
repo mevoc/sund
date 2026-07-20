@@ -1,20 +1,160 @@
 package store
 
-import "testing"
+import (
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"errors"
+	"testing"
+	"time"
+)
 
-func TestOpenInMemory(t *testing.T) {
-	db, err := Open(":memory:")
+func newStore(t *testing.T) *Store {
+	t.Helper()
+	st, err := Open(":memory:")
 	if err != nil {
 		t.Fatalf("Open(:memory:): %v", err)
 	}
-	defer db.Close()
+	t.Cleanup(func() { st.Close() })
+	return st
+}
 
-	// Prove the pure-Go driver actually round-trips a query on this host.
-	var got int
-	if err := db.QueryRow("SELECT 1").Scan(&got); err != nil {
-		t.Fatalf("SELECT 1: %v", err)
+func seedAccountAndToken(t *testing.T, st *Store, ttl time.Duration) (accountID, token string) {
+	t.Helper()
+	ctx := context.Background()
+	acc, err := st.CreateAccount(ctx, "standard")
+	if err != nil {
+		t.Fatalf("CreateAccount: %v", err)
 	}
-	if got != 1 {
-		t.Fatalf("SELECT 1 = %d, want 1", got)
+	token, _, err = st.CreateInvitation(ctx, acc.ID, ttl)
+	if err != nil {
+		t.Fatalf("CreateInvitation: %v", err)
+	}
+	return acc.ID, token
+}
+
+func randKey(t *testing.T) ed25519.PublicKey {
+	t.Helper()
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	return pub
+}
+
+func TestRegisterDeviceHappyPath(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	accountID, token := seedAccountAndToken(t, st, 15*time.Minute)
+	pub := randKey(t)
+
+	dev, err := st.RegisterDevice(ctx, token, pub, "https://ntfy.example/abc", "beacon")
+	if err != nil {
+		t.Fatalf("RegisterDevice: %v", err)
+	}
+	if dev.AccountID != accountID {
+		t.Errorf("device account = %q, want %q", dev.AccountID, accountID)
+	}
+	if !dev.PublicKey.Equal(pub) {
+		t.Error("stored public key does not match")
+	}
+
+	got, err := st.GetDevice(ctx, dev.ID)
+	if err != nil {
+		t.Fatalf("GetDevice: %v", err)
+	}
+	if got.PushEndpoint != "https://ntfy.example/abc" {
+		t.Errorf("push endpoint = %q", got.PushEndpoint)
+	}
+}
+
+func TestRegisterDeviceSingleUse(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	_, token := seedAccountAndToken(t, st, 15*time.Minute)
+
+	if _, err := st.RegisterDevice(ctx, token, randKey(t), "", ""); err != nil {
+		t.Fatalf("first RegisterDevice: %v", err)
+	}
+	_, err := st.RegisterDevice(ctx, token, randKey(t), "", "")
+	if !errors.Is(err, ErrInvalidInvitation) {
+		t.Fatalf("second RegisterDevice err = %v, want ErrInvalidInvitation", err)
+	}
+}
+
+func TestRegisterDeviceExpiredToken(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	_, token := seedAccountAndToken(t, st, -1*time.Minute) // already expired
+
+	_, err := st.RegisterDevice(ctx, token, randKey(t), "", "")
+	if !errors.Is(err, ErrInvalidInvitation) {
+		t.Fatalf("expired RegisterDevice err = %v, want ErrInvalidInvitation", err)
+	}
+}
+
+func TestRegisterDeviceUnknownToken(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	_, err := st.RegisterDevice(ctx, "not-a-real-token", randKey(t), "", "")
+	if !errors.Is(err, ErrInvalidInvitation) {
+		t.Fatalf("unknown token err = %v, want ErrInvalidInvitation", err)
+	}
+}
+
+func TestListDevices(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	acc, err := st.CreateAccount(ctx, "standard")
+	if err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		token, _, err := st.CreateInvitation(ctx, acc.ID, 15*time.Minute)
+		if err != nil {
+			t.Fatalf("CreateInvitation: %v", err)
+		}
+		if _, err := st.RegisterDevice(ctx, token, randKey(t), "", ""); err != nil {
+			t.Fatalf("RegisterDevice: %v", err)
+		}
+	}
+
+	devs, err := st.ListDevices(ctx, acc.ID)
+	if err != nil {
+		t.Fatalf("ListDevices: %v", err)
+	}
+	if len(devs) != 3 {
+		t.Fatalf("ListDevices returned %d devices, want 3", len(devs))
+	}
+}
+
+func TestGetDeviceNotFound(t *testing.T) {
+	st := newStore(t)
+	_, err := st.GetDevice(context.Background(), "dev_nope")
+	if !errors.Is(err, ErrDeviceNotFound) {
+		t.Fatalf("GetDevice err = %v, want ErrDeviceNotFound", err)
+	}
+}
+
+func TestCrossAccountIsolation(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+
+	_, tokenA := seedAccountAndToken(t, st, 15*time.Minute)
+	accB, tokenB := seedAccountAndToken(t, st, 15*time.Minute)
+
+	if _, err := st.RegisterDevice(ctx, tokenA, randKey(t), "", ""); err != nil {
+		t.Fatalf("register A: %v", err)
+	}
+	if _, err := st.RegisterDevice(ctx, tokenB, randKey(t), "", ""); err != nil {
+		t.Fatalf("register B: %v", err)
+	}
+
+	devsB, err := st.ListDevices(ctx, accB)
+	if err != nil {
+		t.Fatalf("ListDevices(B): %v", err)
+	}
+	if len(devsB) != 1 {
+		t.Fatalf("account B sees %d devices, want only its own 1", len(devsB))
 	}
 }

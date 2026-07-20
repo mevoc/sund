@@ -13,9 +13,20 @@ interprets them. (Working name.)
 
 ## Status
 
-Early scaffold. The server exposes only `/health`; the two-plane API —
-management (device identity) and transport (pseudonymous queues) — is being
-built on this skeleton per the PRD.
+Early. The first management-plane slice is in place; the transport plane
+(pseudonymous queues, send/recv) is next. Implemented endpoints:
+
+| Method & path              | Auth                 | Purpose                              |
+| -------------------------- | -------------------- | ------------------------------------ |
+| `GET /health`              | none                 | liveness                             |
+| `POST /v1/devices/register`| one-time token       | enroll a device (bootstrap)          |
+| `GET /v1/devices`          | Ed25519 signature    | list the account's devices           |
+| `POST /v1/invitations`     | Ed25519 signature    | mint a token to pair another device  |
+
+Signed requests carry `Sund-Device-Id`, `Sund-Timestamp`, `Sund-Nonce` and
+`Sund-Signature` headers; the signature covers method, path, timestamp, nonce
+and a hash of the body (see `internal/sigauth`). Accounts are provisioned by the
+operator with `sund admin account create`.
 
 ## Stack
 

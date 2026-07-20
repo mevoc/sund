@@ -68,6 +68,7 @@ func New(cfg Config, st *store.Store) *Server {
 	mux.HandleFunc("POST /v1/devices/register", s.handleRegister)
 	// Signed management-plane routes.
 	mux.Handle("GET /v1/devices", s.requireSignature(http.HandlerFunc(s.handleListDevices)))
+	mux.Handle("POST /v1/devices/{id}/revoke", s.requireSignature(http.HandlerFunc(s.handleRevoke)))
 	mux.Handle("POST /v1/invitations", s.requireSignature(http.HandlerFunc(s.handleCreateInvitation)))
 	mux.Handle("PUT /v1/me/push", s.requireSignature(http.HandlerFunc(s.handleUpdatePush)))
 	// Queue creation is the plane meeting point: signed by device identity so

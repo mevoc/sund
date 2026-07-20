@@ -136,6 +136,74 @@ func TestGetDeviceNotFound(t *testing.T) {
 	}
 }
 
+func TestRevokeDevice(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+
+	acc, err := st.CreateAccount(ctx, "standard")
+	if err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	token, _, err := st.CreateInvitation(ctx, acc.ID, 15*time.Minute)
+	if err != nil {
+		t.Fatalf("CreateInvitation: %v", err)
+	}
+	dev, err := st.RegisterDevice(ctx, token, randKey(t), "https://push/x", "")
+	if err != nil {
+		t.Fatalf("RegisterDevice: %v", err)
+	}
+	q, err := st.CreateQueue(ctx, dev.ID, randKey(t))
+	if err != nil {
+		t.Fatalf("CreateQueue: %v", err)
+	}
+	if _, err := st.AppendMessage(ctx, q.RecipientID, []byte("ct"), time.Hour); err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+
+	if err := st.RevokeDevice(ctx, dev.ID); err != nil {
+		t.Fatalf("RevokeDevice: %v", err)
+	}
+
+	got, err := st.GetDevice(ctx, dev.ID)
+	if err != nil {
+		t.Fatalf("GetDevice: %v", err)
+	}
+	if !got.Revoked {
+		t.Error("device should be revoked")
+	}
+	if got.PushEndpoint != "" {
+		t.Errorf("push endpoint = %q, want cleared", got.PushEndpoint)
+	}
+
+	gotQ, err := st.GetQueueByRecipient(ctx, q.RecipientID)
+	if err != nil {
+		t.Fatalf("GetQueueByRecipient: %v", err)
+	}
+	if !gotQ.Retired {
+		t.Error("owned queue should be retired")
+	}
+	msgs, _ := st.DrainMessages(ctx, q.RecipientID)
+	if len(msgs) != 0 {
+		t.Errorf("owned queue still has %d messages, want 0", len(msgs))
+	}
+}
+
+func TestRevokeDeviceIdempotent(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	_, token := seedAccountAndToken(t, st, 15*time.Minute)
+	dev, err := st.RegisterDevice(ctx, token, randKey(t), "", "")
+	if err != nil {
+		t.Fatalf("RegisterDevice: %v", err)
+	}
+	if err := st.RevokeDevice(ctx, dev.ID); err != nil {
+		t.Fatalf("first revoke: %v", err)
+	}
+	if err := st.RevokeDevice(ctx, dev.ID); err != nil {
+		t.Fatalf("second revoke should be a no-op, got: %v", err)
+	}
+}
+
 func TestCrossAccountIsolation(t *testing.T) {
 	st := newStore(t)
 	ctx := context.Background()

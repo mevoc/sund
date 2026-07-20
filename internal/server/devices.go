@@ -57,6 +57,42 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, registerResponse{DeviceID: dev.ID, AccountID: dev.AccountID})
 }
 
+// handleRevoke revokes a device in the caller's account. Any device in the
+// account may revoke any other (or itself); whether that should be limited to an
+// admin role is app-level policy, not Sund's. Cross-account targets 404 without
+// confirming they exist.
+func (s *Server) handleRevoke(w http.ResponseWriter, r *http.Request) {
+	caller, ok := deviceFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	targetID := r.PathValue("id")
+
+	target, err := s.store.GetDevice(r.Context(), targetID)
+	if errors.Is(err, store.ErrDeviceNotFound) || (target != nil && target.AccountID != caller.AccountID) {
+		writeError(w, http.StatusNotFound, "no such device")
+		return
+	}
+	if err != nil {
+		log.Printf("revoke lookup: %v", err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	if err := s.store.RevokeDevice(r.Context(), targetID); err != nil {
+		log.Printf("revoke: %v", err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	// Device-list change: wake the account's other devices so they refetch,
+	// drop the revoked device's queues, and rotate/re-key their own.
+	s.wakeAccountDevices(caller.AccountID, targetID)
+
+	writeJSON(w, http.StatusOK, map[string]bool{"revoked": true})
+}
+
 type deviceView struct {
 	ID           string `json:"id"`
 	PublicKey    string `json:"public_key"` // base64 (standard)

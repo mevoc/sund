@@ -150,7 +150,7 @@ func (s *Store) DrainMessages(ctx context.Context, recipientID string) ([]Messag
 		return nil, err
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, queue_id, payload, received_at, expires, status FROM messages WHERE queue_id=? ORDER BY received_at, id`,
+		`SELECT id, queue_id, payload, received_at, expires, status FROM messages WHERE queue_id=? ORDER BY seq`,
 		recipientID,
 	)
 	if err != nil {

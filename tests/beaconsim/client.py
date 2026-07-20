@@ -95,6 +95,11 @@ class Client:
         r = self._request("PUT", "/v1/me/push", body)
         r.raise_for_status()
 
+    def revoke_device(self, device_id: str) -> None:
+        """Revoke a device in this account (e.g. a lost or stolen phone)."""
+        r = self._request("POST", f"/v1/devices/{device_id}/revoke")
+        r.raise_for_status()
+
     def create_queue(self) -> "Queue":
         """Create a blind queue owned by this device.
 

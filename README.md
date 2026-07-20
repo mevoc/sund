@@ -13,14 +13,16 @@ interprets them. (Working name.)
 
 ## Status
 
-Both planes work, with push wake-up wired in; device revocation and per-account
-storage quota are next. Implemented endpoints:
+Both planes work, with push wake-up and device revocation wired in; per-account
+storage quota and the standalone blindness/operator audits are next. Implemented
+endpoints:
 
 | Method & path               | Auth                | Purpose                              |
 | --------------------------- | ------------------- | ------------------------------------ |
 | `GET /health`               | none                | liveness                             |
 | `POST /v1/devices/register` | one-time token      | enroll a device (bootstrap)          |
 | `GET /v1/devices`           | device signature    | list the account's devices           |
+| `POST /v1/devices/{id}/revoke` | device signature | revoke a device (kills it + its queues) |
 | `POST /v1/invitations`      | device signature    | mint a token to pair another device  |
 | `PUT /v1/me/push`           | device signature    | register this device's wake-up endpoint |
 | `POST /v1/queues`           | device signature    | create a blind queue you own         |
@@ -28,6 +30,12 @@ storage quota are next. Implemented endpoints:
 | `GET /v1/recv/{recipient_id}` | per-queue recipient key | drain your queue                  |
 | `POST /v1/ack/{recipient_id}` | per-queue recipient key | delete acknowledged messages      |
 | `POST /v1/retire/{recipient_id}` | per-queue recipient key | retire a queue (rotation)      |
+
+**Revocation** is one atomic step: the target's identity key dies, its push
+endpoint is cleared, and every queue it owns is retired with its messages
+dropped. The account's other devices are pinged to refetch the list and rotate
+their own queues. Any device in an account may revoke another (an admin-role
+restriction, if wanted, is app-level policy).
 
 **Wake-up** is a contentless ping — no payload, no queue id, only "check in".
 The server pings a queue's owner when a message arrives (resolving queue → owner

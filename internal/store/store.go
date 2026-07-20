@@ -148,8 +148,13 @@ CREATE TABLE IF NOT EXISTS queues (
 CREATE INDEX IF NOT EXISTS idx_queues_sender ON queues(sender_id);
 CREATE INDEX IF NOT EXISTS idx_queues_owner ON queues(owner_device);
 
+-- seq is a monotonic insertion counter: it gives a queue a stable per-message
+-- order independent of the second-precision received_at, so messages sent within
+-- the same second still drain in send order (the protocol assumes per-queue
+-- ordering). id is the external handle used to ack.
 CREATE TABLE IF NOT EXISTS messages (
-  id          TEXT PRIMARY KEY,
+  seq         INTEGER PRIMARY KEY AUTOINCREMENT,
+  id          TEXT NOT NULL UNIQUE,
   queue_id    TEXT NOT NULL REFERENCES queues(recipient_id),
   payload     BLOB NOT NULL,
   received_at TEXT NOT NULL,
@@ -313,6 +318,33 @@ func (s *Store) TouchLastSeen(ctx context.Context, id string) error {
 func (s *Store) UpdatePushEndpoint(ctx context.Context, id, endpoint string) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE devices SET push_endpoint=? WHERE id=?`, endpoint, id)
 	return err
+}
+
+// RevokeDevice kills a device in one atomic step: its identity key dies
+// (revoked=1), its push endpoint is dropped, and every queue it owns is retired
+// with its undelivered messages deleted. Afterward the device's signed requests
+// fail and its owned queues are unreachable. Idempotent — revoking an
+// already-revoked device is a no-op that still succeeds.
+func (s *Store) RevokeDevice(ctx context.Context, id string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM messages WHERE queue_id IN (SELECT recipient_id FROM queues WHERE owner_device=?)`,
+		id,
+	); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE queues SET retired=1 WHERE owner_device=?`, id); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE devices SET revoked=1, push_endpoint='' WHERE id=?`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 const deviceColumns = `SELECT id, account_id, public_key, push_endpoint, capabilities, created, last_seen, revoked FROM devices`

@@ -55,10 +55,20 @@ func usage() {
 	fmt.Fprintf(os.Stderr, "usage: sund <serve|admin|version> [flags]\n")
 }
 
+// envOr returns the environment variable named key, or def if it is unset or
+// empty. It backs the flag defaults so the binary is configurable via the
+// environment (12-factor) while an explicit flag still wins.
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
 func runServe(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	addr := fs.String("addr", ":5870", "listen address")
-	dbPath := fs.String("db", "sund.db", "path to the SQLite database file")
+	addr := fs.String("addr", envOr("SUND_ADDR", ":5870"), "listen address (env: SUND_ADDR)")
+	dbPath := fs.String("db", envOr("SUND_DB", "sund.db"), "path to the SQLite database file (env: SUND_DB)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -86,7 +96,7 @@ func runAdmin(args []string) error {
 	}
 
 	fs := flag.NewFlagSet("admin account create", flag.ExitOnError)
-	dbPath := fs.String("db", "sund.db", "path to the SQLite database file")
+	dbPath := fs.String("db", envOr("SUND_DB", "sund.db"), "path to the SQLite database file (env: SUND_DB)")
 	quota := fs.String("quota", "standard", "account quota class")
 	quotaBytes := fs.Int64("quota-bytes", 0, "explicit storage quota in bytes (0 = class default)")
 	ttl := fs.Duration("ttl", 15*time.Minute, "invitation time-to-live")

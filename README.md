@@ -89,3 +89,29 @@ Run it:
 ./sund serve --addr :5870 --db sund.db
 curl localhost:5870/health      # {"status":"ok","version":"0.0.0-dev"}
 ```
+
+## Configuration
+
+`serve` and `admin` read defaults from the environment, and an explicit flag
+still wins:
+
+| Env var     | Flag    | Default    | Applies to     |
+| ----------- | ------- | ---------- | -------------- |
+| `SUND_ADDR` | `--addr`| `:5870`    | `serve`        |
+| `SUND_DB`   | `--db`  | `sund.db`  | `serve`, `admin` |
+
+## Container image
+
+CI builds a multi-arch (amd64/arm64) image on every push to `main` and publishes
+it to the GitHub Container Registry. It is a distroless, non-root static binary;
+the database lives on the `/data` volume.
+
+```sh
+docker run -d --name sund -p 5870:5870 -v sund-data:/data ghcr.io/mevoc/sund:latest
+# create the first account (prints an invitation token):
+docker exec sund /sund admin account create
+```
+
+The server speaks plain HTTP; terminate TLS at a reverse proxy in front of it. A
+full self-hosting stack (with a UnifiedPush distributor and TLS) is a consumer
+concern — see `../family-beacon`.

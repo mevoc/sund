@@ -1,0 +1,17 @@
+# Keep the build context to the Go sources the image needs.
+.git
+.github
+docs
+tests
+*.md
+Makefile
+
+# Local build artifacts / data
+/sund
+/sund-*
+dist
+*.db
+*.db-wal
+*.db-shm
+backup
+.claude

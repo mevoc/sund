@@ -172,6 +172,15 @@ CREATE TABLE IF NOT EXISTS messages (
   status      TEXT NOT NULL DEFAULT 'stored'
 );
 CREATE INDEX IF NOT EXISTS idx_messages_queue ON messages(queue_id);
+
+-- A per-device dead-drop of opaque client key material (an X3DH-style prekey
+-- bundle) so a device can pair asynchronously with an offline peer. One blob per
+-- device; the server stores and serves it verbatim and never interprets it.
+CREATE TABLE IF NOT EXISTS bundles (
+  device_id TEXT PRIMARY KEY REFERENCES devices(id),
+  blob      BLOB NOT NULL,
+  updated   TEXT NOT NULL
+);
 `
 
 func migrate(db *sql.DB) error {
@@ -469,6 +478,9 @@ func (s *Store) RevokeDevice(ctx context.Context, id string) error {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE queues SET retired=1 WHERE owner_device=?`, id); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM bundles WHERE device_id=?`, id); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE devices SET revoked=1, push_endpoint='' WHERE id=?`, id); err != nil {

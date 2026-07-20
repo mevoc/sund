@@ -127,6 +127,18 @@ class Client:
         r = self._request("POST", f"/v1/devices/{device_id}/revoke")
         r.raise_for_status()
 
+    def publish_bundle(self, blob: bytes) -> None:
+        """Publish this device's opaque key bundle (a dead-drop for async pairing)."""
+        body = json.dumps({"bundle": base64.b64encode(blob).decode()}).encode()
+        r = self._request("PUT", "/v1/me/bundle", body)
+        r.raise_for_status()
+
+    def get_bundle(self, device_id: str) -> bytes:
+        """Fetch a peer device's published key bundle, verbatim."""
+        r = self._request("GET", f"/v1/devices/{device_id}/bundle")
+        r.raise_for_status()
+        return base64.b64decode(r.json()["bundle"])
+
     def create_queue(self) -> "Queue":
         """Create a blind queue owned by this device.
 

@@ -111,7 +111,23 @@ Devices
 - Key bundles: each device may publish a small, size-capped, opaque blob of
   client-side key material (e.g. prekeys for X3DH-style async session setup),
   retrievable by other devices in the account. The server never interprets it —
-  it is a dead-drop, not a crypto service.
+  it is a dead-drop, not a crypto service. This is what makes mesh pairing scale:
+  a new device can pair with an *offline* peer by fetching its bundle, instead of
+  needing a co-present QR ceremony with each one. Bundles are self-authenticating
+  to clients — signed by the publishing device's identity key and verified by the
+  fetcher against the device list — so a malicious host cannot substitute a forged
+  bundle even though Sund serves it without checking.
+
+  One-time prekeys create a tension worth stating. Strict X3DH forward secrecy
+  wants each one-time prekey used once, which a classic prekey server enforces by
+  *popping* a key per fetch — but popping requires understanding the blob's
+  structure, which Sund refuses to do. Sund's stance follows the dead-drop rule:
+  it returns the same bytes to every fetch and pops nothing; the client owns
+  one-time-prekey management — by rotating its published bundle, or by using an
+  X3DH variant without one-time prekeys (accepting slightly weaker
+  initial-message forward secrecy). Which of those a consumer picks is a
+  client-protocol decision, and it is why the exact bundle *format* is the
+  consumer's to define; Sund only stores and serves it.
 
 Queues
 - A queue is a unidirectional channel owned by one recipient device, created by

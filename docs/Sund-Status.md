@@ -21,8 +21,8 @@ At a glance
 - Tests: a Go unit suite and a Python system suite (`beaconsim`) that drives the
   real compiled binary with real crypto. ~49 Go cases, ~29 system tests, both
   per-commit. Includes the blindness audit (S8) and operator-survival (S9).
-- Not yet built: key bundles, iOS push provider, in-binary TLS / fingerprint
-  pinning, metrics. See "Not built yet".
+- Not yet built: iOS push provider, in-binary TLS / fingerprint pinning, metrics.
+  See "Not built yet".
 
 ---
 
@@ -81,6 +81,8 @@ HTTP API (implemented endpoints)
     GET  /v1/invitations               device signature        list outstanding invitations
     POST /v1/invitations/{id}/revoke   device signature        revoke before use
     PUT  /v1/me/push                   device signature        set wake-up endpoint
+    PUT  /v1/me/bundle                 device signature        publish own key bundle
+    GET  /v1/devices/{id}/bundle       device signature        fetch a peer's bundle
     POST /v1/queues                    device signature        create a blind queue
     POST /v1/send/{sender_id}          per-queue sender key     append a message
     GET  /v1/recv/{recipient_id}       per-queue recipient key  drain the queue
@@ -147,6 +149,15 @@ Behavior details a consumer should know
   unexpired) invitations and revoke one by id before it is used — the stolen-QR
   mitigation. The token itself is never stored (only its hash) or returned by the
   listing.
+- Key bundles: each device may publish one opaque, size-capped (8 KiB) blob of
+  key material via `PUT /v1/me/bundle`; another device in the account fetches it
+  verbatim via `GET /v1/devices/{id}/bundle` to pair with an offline peer. The
+  server stores and serves bytes and never interprets them — it does not pop
+  one-time prekeys, so managing prekey rotation/consumption is the client's
+  concern (the prekey/opacity tension is documented in the PRD's Key bundles
+  note). A revoked or cross-account target 404s; a device's bundle is cleared on
+  revocation. Bundles are public key material, not secrets, and are distinct from
+  blob/object storage (a Non-goal).
 - Multi-tenancy: accounts are isolated. Cross-account reads/sends/revokes fail.
 
 ---
@@ -220,9 +231,6 @@ Run both with `make test-all`.
 
 Not built yet (relative to the PRD / API sketch)
 
-- Key bundles: `PUT /v1/me/bundle`, `GET /v1/devices/{id}/bundle` — the opaque
-  dead-drop for async X3DH prekeys. In PRD scope, just not implemented yet; the
-  table is not present. (Distinct from blob/object storage, which is a Non-goal.)
 - In-binary TLS and the `sund://host:port#fingerprint` address / QR pinning: the
   binary serves plain HTTP; TLS + fingerprint pinning are expected at the reverse
   proxy and on the client, not yet produced or verified by Sund itself.

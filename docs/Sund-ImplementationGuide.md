@@ -1,6 +1,6 @@
 Sund — Implementation Guide
 
-Status: v0.2 (Draft) — companion to Sund-PRD-0_3.md
+Status: v0.2 (Draft) — companion to Sund-PRD.md
 
 > New in 0.2: a Toolchain section, settling the build/test/run tooling for the
 > first implementation step (July 2026). Two decisions of note: the SQLite driver

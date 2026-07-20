@@ -45,7 +45,7 @@ backend of `../family-beacon`. **Spec only, no code yet.**
 
 ## Docs
 
-- `docs/Sund-PRD-0_3.md` — **current.** Two-plane architecture, pseudonymous
+- `docs/Sund-PRD.md` — **current (v0.3).** Two-plane architecture, pseudonymous
   queues, device list/revocation/key bundles, push architecture (UnifiedPush/ntfy
   on Android; vendor APNS gateway on iOS — pluggable provider interface),
   fingerprint-pinned server address, one-binary stack requirement. New in 0.3:
@@ -54,14 +54,14 @@ backend of `../family-beacon`. **Spec only, no code yet.**
   per-commit test strategy (unit + system suites, blindness audit). Stack locked
   July 2026: Go + SQLite (family-beacon ARCHITECTURE.md updated to match).
   Remaining open: iOS gateway operations, blob module, rotation policy.
-- `docs/Sund-ImplementationGuide-0_1.md` — companion to PRD 0.3: components, API
+- `docs/Sund-ImplementationGuide.md` — companion to PRD 0.3: components, API
   sketch (two planes), walkthroughs for first-device onboarding and second-device
   invitation (SimpleX-style QR bootstrap), each step mapped to Family Beacon.
   Also the test strategy: unit + system suites (both per-commit), the beaconsim
   client mockup, scenarios S1–S9. Its three surfaced open items are resolved in
   PRD 0.3.
-- `docs/Sund-PriorArt-0_1.md` — survey (July 2026): SimpleX SMP is the closest
+- `docs/Sund-PriorArt.md` — survey (July 2026): SimpleX SMP is the closest
   incumbent; the gap Sund fills (blind transport + account/device model) is
   unoccupied. Its five design implications are incorporated in PRD 0.2.
-- `docs/Sund-PRD-0_2.md`, `docs/Sund-PRD-0_1.md` — superseded revisions; kept for
-  history.
+- Doc filenames are unversioned; the version lives in each doc's `Status:` line.
+  Superseded PRD revisions (0.1, 0.2) live in git history, not as separate files.

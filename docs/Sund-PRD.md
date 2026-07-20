@@ -7,7 +7,7 @@ Status: PRD v0.3 (Draft) — supersedes PRD 0.2
 > Working name: **Sund** (Swedish: a strait between islands — the channel between
 > skerries; also "sound, healthy"). The kernel extracted from Skerry
 > (`../skerry`). This revision folds in the three open items surfaced by
-> `Sund-ImplementationGuide-0_1.md` (July 2026): push-ping fan-in made explicit in
+> `Sund-ImplementationGuide.md` (July 2026): push-ping fan-in made explicit in
 > the threat model, invitation semantics specified, and device-list change
 > propagation decided. It also adds the per-commit test strategy (decision 9)
 > and locks the stack: Go + SQLite (decision 10). The changes are listed at the
@@ -273,7 +273,7 @@ Non-goals
 
 Prior art
 
-See `Sund-PriorArt-0_1.md`. The queue design above adapts SimpleX's SMP addressing
+See `Sund-PriorArt.md`. The queue design above adapts SimpleX's SMP addressing
 to a substrate with accounts; the bootstrap ergonomics follow Signal's
 device-management patterns; the push leg adopts UnifiedPush/ntfy; the address
 format follows SimpleX's fingerprint pinning. The surveyed gap — blind transport
@@ -287,7 +287,7 @@ Relationship to other projects
   its backend (July 2026), closing its open decisions #1 (E2EE) and #3 (Skerry
   coupling); #2 (push) is shared. Its ARCHITECTURE.md is rewritten around Sund.
 - skerry — grows around Sund; references it as Layer 1.
-- `Sund-ImplementationGuide-0_1.md` — companion: components, API sketch and
+- `Sund-ImplementationGuide.md` — companion: components, API sketch and
   end-to-end walkthroughs (first-device onboarding, second-device invitation),
   each step mapped to Family Beacon. This PRD is normative where they disagree.
 - Lineage: supersedes the Layer-1 subset of

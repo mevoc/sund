@@ -122,8 +122,19 @@ Queues
   per-queue, not device identity keys.
 - Consequence: the server's records do not link a sender device to a queue. The
   who-talks-to-whom graph is not stored.
-- Rotation: the owner can create a replacement queue and retire the old ID at any
-  time; clients are expected to rotate periodically.
+- Rotation (client-driven — a security-hygiene practice, not an open question):
+  the owner mints a replacement queue, hands the new sender ID to the peer over an
+  existing encrypted channel, and retires the old one; clients rotate
+  periodically. Rotation bounds how long any (recipient, sender) pair persists —
+  shrinking the window a host has to profile a queue from timing — and it
+  completes revocation on the sender side, since the server structurally cannot
+  kill a sender's access to a queue (there is no stored sender↔queue link to
+  revoke). The server assists exactly as far as it can while staying blind: a send
+  to a retired queue fails closed, which is the stale sender's signal to fetch a
+  new address. It deliberately offers no old→new redirect or forwarding — that
+  would force the server to learn the very who-talks-to-whom graph it refuses to
+  store. Caveat: retire drops the queue's undelivered messages, so a rotating
+  owner drains the old queue before retiring it.
 - V1 scope: queues connect devices within the same account.
 
 Messages
@@ -340,8 +351,17 @@ Open decisions remaining
    batching/jitter to blunt timing analysis at the gateway. The architecture
    itself is settled in Push architecture; "no lock-in" is structurally
    unattainable on iOS — only containment is.
-2. Blob module — revisit when a consumer needs it.
-3. Queue rotation policy: client-driven only, or server-assisted hints?
+
+Resolved since first listed as open (no longer decisions):
+
+- Blob/object storage — a Non-goal, not an open question: add it only when a
+  consumer demonstrates need, as a separate optional module keeping the same
+  blindness guarantee (see Non-goals). Distinct from key bundles, which are in
+  scope and store opaque client key material.
+- Queue rotation — client-driven by design; the existing primitives (create /
+  retire, and a fail-closed 404 for a stale sender) are sufficient, and no
+  server-assisted redirect is wanted because it would reintroduce the sender↔
+  recipient graph. See Queues (Rotation).
 
 ---
 

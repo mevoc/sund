@@ -221,8 +221,8 @@ Run both with `make test-all`.
 Not built yet (relative to the PRD / API sketch)
 
 - Key bundles: `PUT /v1/me/bundle`, `GET /v1/devices/{id}/bundle` — the opaque
-  dead-drop for async X3DH prekeys. Table not present. (PRD: revisit when a
-  consumer needs it.)
+  dead-drop for async X3DH prekeys. In PRD scope, just not implemented yet; the
+  table is not present. (Distinct from blob/object storage, which is a Non-goal.)
 - In-binary TLS and the `sund://host:port#fingerprint` address / QR pinning: the
   binary serves plain HTTP; TLS + fingerprint pinning are expected at the reverse
   proxy and on the client, not yet produced or verified by Sund itself.
@@ -232,8 +232,12 @@ Not built yet (relative to the PRD / API sketch)
   one account a small overshoot is possible (self-correcting). Fine at the target
   scale; noted for honesty.
 
-Open design decisions (PRD): iOS gateway operations, the blob/bundle module,
-queue-rotation policy (client-driven vs. server-assisted).
+Open design decisions (PRD): only iOS gateway operations remains genuinely open.
+Blob/object storage is a Non-goal (add when a consumer needs it), and queue
+rotation is client-driven by design — the create/retire primitives plus a
+fail-closed 404 for a stale sender suffice, and no server-assisted redirect is
+wanted (it would reintroduce the sender↔recipient graph). Neither needs new
+server API.
 
 ---
 

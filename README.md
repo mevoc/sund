@@ -13,9 +13,10 @@ interprets them. (Working name.)
 
 ## Status
 
-Both planes work, with push wake-up and device revocation wired in, and the
-blindness (S8) and operator-survival (S9) audits pass; per-account storage quota
-is the main feature still open. Implemented endpoints:
+Both planes work, with push wake-up, device revocation, and per-account storage
+quota wired in, and the blindness (S8) and operator-survival (S9) audits pass.
+The remaining items are open design decisions (iOS APNS gateway, key bundles,
+queue-rotation policy). Implemented endpoints:
 
 | Method & path               | Auth                | Purpose                              |
 | --------------------------- | ------------------- | ------------------------------------ |
@@ -36,6 +37,13 @@ endpoint is cleared, and every queue it owns is retired with its messages
 dropped. The account's other devices are pinged to refetch the list and rotate
 their own queues. Any device in an account may revoke another (an admin-role
 restriction, if wanted, is app-level policy).
+
+**Storage quota** is per account, attributed to the queue owner's side (so
+senders stay pseudonymous). A send that would push an account's stored payloads
+past its cap is refused with `507`; space frees as messages are acked or expire.
+Set it with `sund admin account create --quota-bytes N` (or a named `--quota`
+class). A quota of 0 means unlimited, so upgrading an existing database never
+retroactively caps its accounts.
 
 **Wake-up** is a contentless ping — no payload, no queue id, only "check in".
 The server pings a queue's owner when a message arrives (resolving queue → owner

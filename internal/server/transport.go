@@ -136,6 +136,10 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	msg, err := s.store.AppendMessage(r.Context(), q.RecipientID, payload, clampMessageTTL(req.TTL))
+	if errors.Is(err, store.ErrQuotaExceeded) {
+		writeError(w, http.StatusInsufficientStorage, "account storage quota exceeded")
+		return
+	}
 	if err != nil {
 		log.Printf("append message: %v", err)
 		writeError(w, http.StatusInternalServerError, "internal error")

@@ -88,6 +88,7 @@ func runAdmin(args []string) error {
 	fs := flag.NewFlagSet("admin account create", flag.ExitOnError)
 	dbPath := fs.String("db", "sund.db", "path to the SQLite database file")
 	quota := fs.String("quota", "standard", "account quota class")
+	quotaBytes := fs.Int64("quota-bytes", 0, "explicit storage quota in bytes (0 = class default)")
 	ttl := fs.Duration("ttl", 15*time.Minute, "invitation time-to-live")
 	asJSON := fs.Bool("json", false, "emit machine-readable JSON")
 	if err := fs.Parse(args[2:]); err != nil {
@@ -101,7 +102,7 @@ func runAdmin(args []string) error {
 	defer st.Close()
 
 	ctx := context.Background()
-	acc, err := st.CreateAccount(ctx, *quota)
+	acc, err := st.CreateAccount(ctx, *quota, *quotaBytes)
 	if err != nil {
 		return fmt.Errorf("create account: %w", err)
 	}

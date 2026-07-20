@@ -14,6 +14,10 @@ import (
 // a live queue.
 var ErrQueueNotFound = errors.New("queue not found")
 
+// ErrQuotaExceeded is returned when storing a message would push the owning
+// account's stored payloads past its quota.
+var ErrQuotaExceeded = errors.New("account storage quota exceeded")
+
 // Queue is a unidirectional blind channel. SenderKey is nil until bound.
 type Queue struct {
 	RecipientID  string
@@ -121,6 +125,10 @@ func (s *Store) RetireQueue(ctx context.Context, recipientID string) error {
 }
 
 // AppendMessage stores a ciphertext payload on the queue, expiring after ttl.
+// It enforces the owning account's storage quota atomically: the check and
+// insert share a transaction, so a full account cannot be pushed over its cap.
+// Quota counts only non-expired messages, so space frees as messages expire or
+// are acked. Returns ErrQuotaExceeded when the cap would be exceeded.
 func (s *Store) AppendMessage(ctx context.Context, recipientID string, payload []byte, ttl time.Duration) (*Message, error) {
 	id, err := newID("msg_")
 	if err != nil {
@@ -128,13 +136,61 @@ func (s *Store) AppendMessage(ctx context.Context, recipientID string, payload [
 	}
 	now := time.Now().UTC()
 	expires := now.Add(ttl)
-	if _, err := s.db.ExecContext(ctx,
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	// Resolve the quota attributed to this queue's owner account.
+	var (
+		accountID  string
+		quotaBytes int64
+	)
+	err = tx.QueryRowContext(ctx,
+		`SELECT d.account_id, a.quota_bytes
+		   FROM queues q
+		   JOIN devices d ON q.owner_device = d.id
+		   JOIN accounts a ON d.account_id = a.id
+		  WHERE q.recipient_id = ?`,
+		recipientID,
+	).Scan(&accountID, &quotaBytes)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrQueueNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	if quotaBytes > 0 {
+		var used int64
+		if err := tx.QueryRowContext(ctx,
+			`SELECT COALESCE(SUM(LENGTH(m.payload)), 0)
+			   FROM messages m
+			   JOIN queues q ON m.queue_id = q.recipient_id
+			   JOIN devices d ON q.owner_device = d.id
+			  WHERE d.account_id = ? AND m.expires > ?`,
+			accountID, now.Format(time.RFC3339),
+		).Scan(&used); err != nil {
+			return nil, err
+		}
+		if used+int64(len(payload)) > quotaBytes {
+			return nil, ErrQuotaExceeded
+		}
+	}
+
+	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO messages (id, queue_id, payload, received_at, expires, status)
 		 VALUES (?, ?, ?, ?, ?, 'stored')`,
 		id, recipientID, payload, now.Format(time.RFC3339), expires.Format(time.RFC3339),
 	); err != nil {
 		return nil, err
 	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+
 	return &Message{
 		ID: id, QueueID: recipientID, Payload: payload,
 		ReceivedAt: now.Truncate(time.Second), Expires: expires.Truncate(time.Second),

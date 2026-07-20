@@ -9,7 +9,7 @@ import (
 func seedQueue(t *testing.T, st *Store) *Queue {
 	t.Helper()
 	ctx := context.Background()
-	acc, err := st.CreateAccount(ctx, "standard")
+	acc, err := st.CreateAccount(ctx, "standard", 0)
 	if err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}

@@ -22,7 +22,7 @@ func newStore(t *testing.T) *Store {
 func seedAccountAndToken(t *testing.T, st *Store, ttl time.Duration) (accountID, token string) {
 	t.Helper()
 	ctx := context.Background()
-	acc, err := st.CreateAccount(ctx, "standard")
+	acc, err := st.CreateAccount(ctx, "standard", 0)
 	if err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
@@ -105,7 +105,7 @@ func TestRegisterDeviceUnknownToken(t *testing.T) {
 func TestListDevices(t *testing.T) {
 	st := newStore(t)
 	ctx := context.Background()
-	acc, err := st.CreateAccount(ctx, "standard")
+	acc, err := st.CreateAccount(ctx, "standard", 0)
 	if err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestRevokeDevice(t *testing.T) {
 	st := newStore(t)
 	ctx := context.Background()
 
-	acc, err := st.CreateAccount(ctx, "standard")
+	acc, err := st.CreateAccount(ctx, "standard", 0)
 	if err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}

@@ -41,12 +41,15 @@ type Store struct {
 }
 
 // Account is a tenant. Quotas attribute to the account (the recipient side the
-// server knows); senders stay pseudonymous.
+// server knows); senders stay pseudonymous. QuotaBytes caps the total size of
+// stored (undelivered) message payloads across the account's queues; 0 or less
+// means unlimited.
 type Account struct {
-	ID      string
-	Created time.Time
-	Quota   string
-	Status  string
+	ID         string
+	Created    time.Time
+	Quota      string
+	Status     string
+	QuotaBytes int64
 }
 
 // Device is one enrolled device. The server stores the public key only.
@@ -106,10 +109,11 @@ func dsn(path string, memory bool) string {
 
 const schema = `
 CREATE TABLE IF NOT EXISTS accounts (
-  id      TEXT PRIMARY KEY,
-  created TEXT NOT NULL,
-  quota   TEXT NOT NULL,
-  status  TEXT NOT NULL DEFAULT 'active'
+  id          TEXT PRIMARY KEY,
+  created     TEXT NOT NULL,
+  quota       TEXT NOT NULL,
+  status      TEXT NOT NULL DEFAULT 'active',
+  quota_bytes INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS invitations (
   token_hash TEXT PRIMARY KEY,
@@ -165,7 +169,45 @@ CREATE INDEX IF NOT EXISTS idx_messages_queue ON messages(queue_id);
 `
 
 func migrate(db *sql.DB) error {
-	_, err := db.Exec(schema)
+	if _, err := db.Exec(schema); err != nil {
+		return err
+	}
+	// quota_bytes was added after the first accounts schema; add it to databases
+	// created before it existed (a no-op on fresh ones).
+	return ensureColumn(db, "accounts", "quota_bytes", "INTEGER NOT NULL DEFAULT 0")
+}
+
+// ensureColumn adds column to table with the given DDL if it is not already
+// present, so old database files pick up new columns on startup.
+func ensureColumn(db *sql.DB, table, column, ddl string) error {
+	rows, err := db.Query("PRAGMA table_info(" + table + ")")
+	if err != nil {
+		return err
+	}
+	found := false
+	for rows.Next() {
+		var (
+			cid, notnull, pk int
+			name, ctype      string
+			dflt             any
+		)
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			rows.Close()
+			return err
+		}
+		if name == column {
+			found = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	if found {
+		return nil
+	}
+	_, err = db.Exec("ALTER TABLE " + table + " ADD COLUMN " + column + " " + ddl)
 	return err
 }
 
@@ -185,21 +227,26 @@ func hashToken(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// CreateAccount inserts a new account with the given quota.
-func (s *Store) CreateAccount(ctx context.Context, quota string) (*Account, error) {
+// CreateAccount inserts a new account. quotaClass is recorded as the account's
+// tier label; quotaBytes is the enforced storage ceiling, or 0/less to resolve
+// it from the class default.
+func (s *Store) CreateAccount(ctx context.Context, quotaClass string, quotaBytes int64) (*Account, error) {
+	if quotaBytes <= 0 {
+		quotaBytes = QuotaBytesForClass(quotaClass)
+	}
 	id, err := newID("acc_")
 	if err != nil {
 		return nil, err
 	}
 	created := nowStr()
 	if _, err := s.db.ExecContext(ctx,
-		`INSERT INTO accounts (id, created, quota, status) VALUES (?, ?, ?, 'active')`,
-		id, created, quota,
+		`INSERT INTO accounts (id, created, quota, status, quota_bytes) VALUES (?, ?, ?, 'active', ?)`,
+		id, created, quotaClass, quotaBytes,
 	); err != nil {
 		return nil, err
 	}
 	t, _ := time.Parse(time.RFC3339, created)
-	return &Account{ID: id, Created: t, Quota: quota, Status: "active"}, nil
+	return &Account{ID: id, Created: t, Quota: quotaClass, Status: "active", QuotaBytes: quotaBytes}, nil
 }
 
 // CreateInvitation mints a single-use enrollment token for accountID, valid for

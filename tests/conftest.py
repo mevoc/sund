@@ -140,18 +140,16 @@ def provision_account():
     server's database file, and returns (account_id, invitation_token).
     """
 
-    def _provision(server: SundServer, quota: str = "standard") -> tuple[str, str]:
-        proc = subprocess.run(
-            [
-                str(server.binary), "admin", "account", "create",
-                "--db", str(server.db_path),
-                "--quota", quota,
-                "--json",
-            ],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
+    def _provision(server: SundServer, quota: str = "standard", quota_bytes: int = 0) -> tuple[str, str]:
+        args = [
+            str(server.binary), "admin", "account", "create",
+            "--db", str(server.db_path),
+            "--quota", quota,
+        ]
+        if quota_bytes:
+            args += ["--quota-bytes", str(quota_bytes)]
+        args.append("--json")
+        proc = subprocess.run(args, capture_output=True, text=True, check=True)
         data = json.loads(proc.stdout)
         return data["account_id"], data["invitation_token"]
 
@@ -162,8 +160,8 @@ def provision_account():
 def new_account(sund_server, provision_account):
     """Factory bound to the default sund_server fixture."""
 
-    def _make(quota: str = "standard") -> tuple[str, str]:
-        return provision_account(sund_server, quota)
+    def _make(quota: str = "standard", quota_bytes: int = 0) -> tuple[str, str]:
+        return provision_account(sund_server, quota, quota_bytes)
 
     return _make
 

@@ -48,8 +48,10 @@ Nothing here is optional tooling for "later" — this is what the first commit n
 
 Go side (server + unit suite)
 
-    go              1.22+ (stdlib net/http pattern routing — {id} path params —
-                    covers this whole API; no router framework needed)
+    go              1.25+ — the stdlib net/http pattern router ({id} path
+                    params, no framework needed) only requires 1.22, but the
+                    modernc.org/sqlite driver below raises the effective floor
+                    to 1.25 (its go.mod directive; enforced by `go mod tidy`).
     modernc.org/sqlite   pure-Go SQLite driver, CGO_ENABLED=0. The one dependency
                     the server strictly needs. Chosen over mattn/go-sqlite3
                     (cgo) specifically so the one-binary bar (Components, above)

@@ -1,5 +1,7 @@
 # Sund
 
+[![CI](https://github.com/mevoc/sund/actions/workflows/ci.yml/badge.svg)](https://github.com/mevoc/sund/actions/workflows/ci.yml)
+
 > «Own the strait. The cargo stays sealed.»
 
 A minimal, self-hostable, **blind** store-and-forward relay for end-to-end

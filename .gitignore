@@ -1,0 +1,37 @@
+# --- Sund runtime artifacts ---
+# The database file and any backups — never commit operator data.
+*.db
+*.db-wal
+*.db-shm
+sund.db*
+backup/
+
+# Compiled server binary (produced by `go build`)
+/sund
+/sund-*
+dist/
+
+# --- Go ---
+# Test binaries and coverage
+*.test
+*.out
+coverage.*
+
+# --- Python (beaconsim / system suite) ---
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+# uv-managed environment (the lockfile uv.lock IS committed)
+
+# --- Claude Code ---
+# Local, machine-specific settings and permission grants (not shared).
+.claude/settings.local.json
+.claude/*.tmp.*
+
+# --- Editor / OS ---
+.DS_Store
+*.swp
+.idea/
+.vscode/

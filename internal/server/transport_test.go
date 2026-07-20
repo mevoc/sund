@@ -53,7 +53,12 @@ func serve(srv *Server, r *http.Request) *httptest.ResponseRecorder {
 func createQueue(t *testing.T, srv *Server, st *store.Store) (recipientID, senderID string, recipientPriv ed25519.PrivateKey) {
 	t.Helper()
 	deviceID, devicePriv := registerDevice(t, srv, st)
+	return createQueueForDevice(t, srv, deviceID, devicePriv)
+}
 
+// createQueueForDevice creates a queue owned by an already-registered device.
+func createQueueForDevice(t *testing.T, srv *Server, deviceID string, devicePriv ed25519.PrivateKey) (recipientID, senderID string, recipientPriv ed25519.PrivateKey) {
+	t.Helper()
 	recipientPub, recipientPriv, _ := ed25519.GenerateKey(rand.Reader)
 	body := []byte(fmt.Sprintf(`{"recipient_key":%q}`, base64.StdEncoding.EncodeToString(recipientPub)))
 	rec := serve(srv, signWith(t, devicePriv, deviceID, http.MethodPost, "/v1/queues", body, nil))

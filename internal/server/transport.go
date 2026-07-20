@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/mevoc/sund/internal/push"
 	"github.com/mevoc/sund/internal/sigauth"
 	"github.com/mevoc/sund/internal/store"
 )
@@ -64,8 +65,9 @@ func (s *Server) handleCreateQueue(w http.ResponseWriter, r *http.Request) {
 // --- transport-plane routes: authenticated by per-queue keys, no device id ---
 
 type sendRequest struct {
-	Payload string `json:"payload"` // base64 ciphertext
-	TTL     int    `json:"ttl"`     // seconds; <=0 uses the default
+	Payload  string `json:"payload"`  // base64 ciphertext
+	TTL      int    `json:"ttl"`      // seconds; <=0 uses the default
+	Priority bool   `json:"priority"` // opaque high-priority wake-up hint (e.g. SOS)
 }
 
 // handleSend appends a message to a queue addressed by its sender id. On the
@@ -139,8 +141,15 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	// Wake-up ping (resolve queue -> owner device -> push) lands with the push
-	// provider in a later slice; the linkage is q.OwnerDevice.
+
+	// Push-ping fan-in: resolve queue -> owner device -> wake it. The priority
+	// is a client-set hint the server forwards without reading the payload.
+	priority := push.Normal
+	if req.Priority {
+		priority = push.High
+	}
+	s.wakeQueueOwner(q.OwnerDevice, priority)
+
 	writeJSON(w, http.StatusAccepted, map[string]string{"message_id": msg.ID})
 }
 

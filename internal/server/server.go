@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/mevoc/sund/internal/push"
 	"github.com/mevoc/sund/internal/store"
 )
 
@@ -31,12 +32,15 @@ const defaultInvitationTTL = 15 * time.Minute
 // Config holds server construction options.
 type Config struct {
 	Version string
+	// Pinger delivers wake-up pings. If nil, pings are dropped (push.NoopPinger).
+	Pinger push.Pinger
 }
 
 // Server is the Sund HTTP server.
 type Server struct {
 	cfg       Config
 	store     *store.Store
+	pinger    push.Pinger
 	handler   http.Handler
 	nonces    *nonceCache
 	clockSkew time.Duration
@@ -46,9 +50,14 @@ type Server struct {
 // method-and-pattern mux (Go 1.22+); no third-party router — see PRD, the
 // one-binary bar.
 func New(cfg Config, st *store.Store) *Server {
+	pinger := cfg.Pinger
+	if pinger == nil {
+		pinger = push.NoopPinger{}
+	}
 	s := &Server{
 		cfg:       cfg,
 		store:     st,
+		pinger:    pinger,
 		nonces:    newNonceCache(),
 		clockSkew: defaultClockSkew,
 	}
@@ -60,6 +69,7 @@ func New(cfg Config, st *store.Store) *Server {
 	// Signed management-plane routes.
 	mux.Handle("GET /v1/devices", s.requireSignature(http.HandlerFunc(s.handleListDevices)))
 	mux.Handle("POST /v1/invitations", s.requireSignature(http.HandlerFunc(s.handleCreateInvitation)))
+	mux.Handle("PUT /v1/me/push", s.requireSignature(http.HandlerFunc(s.handleUpdatePush)))
 	// Queue creation is the plane meeting point: signed by device identity so
 	// the server records ownership (quota + wake-up).
 	mux.Handle("POST /v1/queues", s.requireSignature(http.HandlerFunc(s.handleCreateQueue)))

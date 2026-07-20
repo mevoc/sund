@@ -51,6 +51,9 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Device-list change: wake the account's other devices so they refetch.
+	s.wakeAccountDevices(dev.AccountID, dev.ID)
+
 	writeJSON(w, http.StatusCreated, registerResponse{DeviceID: dev.ID, AccountID: dev.AccountID})
 }
 

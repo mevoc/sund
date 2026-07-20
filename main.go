@@ -15,11 +15,13 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/mevoc/sund/internal/push"
 	"github.com/mevoc/sund/internal/server"
 	"github.com/mevoc/sund/internal/store"
 )
@@ -71,7 +73,8 @@ func runServe(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	srv := server.New(server.Config{Version: version}, st)
+	pinger := push.NewUnifiedPush(&http.Client{Timeout: 10 * time.Second})
+	srv := server.New(server.Config{Version: version, Pinger: pinger}, st)
 	log.Printf("sund %s listening on %s (db=%s)", version, *addr, *dbPath)
 	return srv.Run(ctx, *addr)
 }

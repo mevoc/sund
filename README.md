@@ -13,8 +13,8 @@ interprets them. (Working name.)
 
 ## Status
 
-Both planes have a working first slice; push wake-up and per-account storage
-quota are next. Implemented endpoints:
+Both planes work, with push wake-up wired in; device revocation and per-account
+storage quota are next. Implemented endpoints:
 
 | Method & path               | Auth                | Purpose                              |
 | --------------------------- | ------------------- | ------------------------------------ |
@@ -22,11 +22,18 @@ quota are next. Implemented endpoints:
 | `POST /v1/devices/register` | one-time token      | enroll a device (bootstrap)          |
 | `GET /v1/devices`           | device signature    | list the account's devices           |
 | `POST /v1/invitations`      | device signature    | mint a token to pair another device  |
+| `PUT /v1/me/push`           | device signature    | register this device's wake-up endpoint |
 | `POST /v1/queues`           | device signature    | create a blind queue you own         |
 | `POST /v1/send/{sender_id}` | per-queue sender key | append an encrypted message          |
 | `GET /v1/recv/{recipient_id}` | per-queue recipient key | drain your queue                  |
 | `POST /v1/ack/{recipient_id}` | per-queue recipient key | delete acknowledged messages      |
 | `POST /v1/retire/{recipient_id}` | per-queue recipient key | retire a queue (rotation)      |
+
+**Wake-up** is a contentless ping — no payload, no queue id, only "check in".
+The server pings a queue's owner when a message arrives (resolving queue → owner
+device live, never as a stored link), and pings an account's other devices when
+its device list changes. Android delivery is a self-hostable UnifiedPush/ntfy
+distributor; the provider is pluggable (`internal/push`).
 
 **Management plane** requests are signed by the device's Ed25519 identity key and
 carry a `Sund-Device-Id` header. **Transport-plane** requests carry no device

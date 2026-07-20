@@ -309,6 +309,12 @@ func (s *Store) TouchLastSeen(ctx context.Context, id string) error {
 	return err
 }
 
+// UpdatePushEndpoint sets (or clears, if empty) a device's wake-up endpoint.
+func (s *Store) UpdatePushEndpoint(ctx context.Context, id, endpoint string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE devices SET push_endpoint=? WHERE id=?`, endpoint, id)
+	return err
+}
+
 const deviceColumns = `SELECT id, account_id, public_key, push_endpoint, capabilities, created, last_seen, revoked FROM devices`
 
 type rowScanner interface {

@@ -12,8 +12,10 @@ import os
 import shutil
 import socket
 import subprocess
+import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 import httpx
@@ -102,6 +104,54 @@ def new_account(sund_server):
         return data["account_id"], data["invitation_token"]
 
     return _make
+
+
+@dataclass
+class PushSink:
+    """A stub UnifiedPush distributor that records the pings it receives."""
+
+    port: int
+    received: list = field(default_factory=list)
+
+    def url(self, path: str = "/UP") -> str:
+        return f"http://127.0.0.1:{self.port}{path}"
+
+    def wait_for(self, count: int = 1, timeout: float = 3.0) -> bool:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if len(self.received) >= count:
+                return True
+            time.sleep(0.02)
+        return len(self.received) >= count
+
+
+@pytest.fixture
+def push_sink():
+    received: list = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length) if length else b""
+            received.append({
+                "path": self.path,
+                "body": body,
+                "priority": self.headers.get("Priority"),
+            })
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass  # keep the test output quiet
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    sink = PushSink(port=server.server_address[1], received=received)
+    try:
+        yield sink
+    finally:
+        server.shutdown()
 
 
 def _wait_until_ready(base_url: str, proc: subprocess.Popen, timeout: float = 10.0):

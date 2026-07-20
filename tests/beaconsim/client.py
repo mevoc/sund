@@ -89,6 +89,12 @@ class Client:
         r.raise_for_status()
         return r.json()["invitation_token"]
 
+    def set_push_endpoint(self, endpoint: str) -> None:
+        """Register this device's wake-up endpoint (e.g. a UnifiedPush URL)."""
+        body = json.dumps({"push_endpoint": endpoint}).encode()
+        r = self._request("PUT", "/v1/me/push", body)
+        r.raise_for_status()
+
     def create_queue(self) -> "Queue":
         """Create a blind queue owned by this device.
 
@@ -164,10 +170,10 @@ class Sender:
         self._key = SigningKey.generate()
         self._bound = False
 
-    def send(self, plaintext: bytes, ttl: int = 60) -> str:
+    def send(self, plaintext: bytes, ttl: int = 60, priority: bool = False) -> str:
         ciphertext = bytes(self._box.encrypt(plaintext))
         body = json.dumps(
-            {"payload": base64.b64encode(ciphertext).decode(), "ttl": ttl}
+            {"payload": base64.b64encode(ciphertext).decode(), "ttl": ttl, "priority": priority}
         ).encode()
         path = f"/v1/send/{self.sender_id}"
         headers = sign_headers(self._key, "POST", path, body)

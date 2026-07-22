@@ -36,6 +36,12 @@ __pycache__/
 compose.override.yaml
 compose.override.yml
 
+# TLS material generated at runtime (sund serve/cert --tls-dir)
+certs/
+*.crt
+*.key
+*.pem
+
 # --- Editor / OS ---
 .DS_Store
 *.swp

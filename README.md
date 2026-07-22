@@ -97,10 +97,32 @@ curl localhost:5870/health      # {"status":"ok","version":"0.0.0-dev"}
 `serve` and `admin` read defaults from the environment, and an explicit flag
 still wins:
 
-| Env var     | Flag    | Default    | Applies to     |
-| ----------- | ------- | ---------- | -------------- |
-| `SUND_ADDR` | `--addr`| `:5870`    | `serve`        |
-| `SUND_DB`   | `--db`  | `sund.db`  | `serve`, `admin` |
+| Env var       | Flag        | Default    | Applies to        |
+| ------------- | ----------- | ---------- | ----------------- |
+| `SUND_ADDR`   | `--addr`    | `:5870`    | `serve`           |
+| `SUND_DB`     | `--db`      | `sund.db`  | `serve`, `admin`  |
+| `SUND_TLS_DIR`| `--tls-dir` | *(unset)*  | `serve`, `cert`   |
+
+## Transport security (pinned TLS)
+
+By default the server speaks plain HTTP, meant to sit behind a TLS-terminating
+reverse proxy (ordinary WebPKI). Alternatively, `serve --tls-dir DIR` serves
+HTTPS itself with a **fingerprint-pinned** self-signed certificate — no CA, no
+domain, works on a bare IP or LAN (the SimpleX model):
+
+```sh
+# print the pinned address for the onboarding QR (generates certs on first run)
+sund cert fingerprint --tls-dir ./certs --host beacon.example:5870
+# → sund://beacon.example:5870#<fingerprint>
+
+sund serve --tls-dir ./certs --addr :5870
+```
+
+The address embeds the SHA-256 of a long-lived offline CA; that CA signs a
+rotatable leaf used for the live handshake, so the leaf can be rotated (delete
+`server.crt`/`server.key`) without changing the pin. A client pins the fingerprint
+from the address and rejects any certificate that doesn't match — a first-connect
+MITM is detected, not trusted. `tests/beaconsim/pinning.py` is a reference client.
 
 ## Container image
 

@@ -4,8 +4,9 @@
 //
 // Subcommands:
 //
-//	sund serve   [--addr :5870] [--db sund.db]
+//	sund serve   [--addr :5870] [--db sund.db] [--tls-dir DIR]
 //	sund admin account create [--db sund.db] [--quota standard] [--ttl 15m] [--json]
+//	sund cert fingerprint [--tls-dir DIR] [--host host:port]
 //	sund health  [--addr :5870]
 //	sund version
 package main
@@ -26,6 +27,7 @@ import (
 	"github.com/mevoc/sund/internal/push"
 	"github.com/mevoc/sund/internal/server"
 	"github.com/mevoc/sund/internal/store"
+	"github.com/mevoc/sund/internal/tlsid"
 )
 
 // version is the build version; override with -ldflags "-X main.version=...".
@@ -45,6 +47,10 @@ func main() {
 		if err := runAdmin(os.Args[2:]); err != nil {
 			log.Fatalf("sund: %v", err)
 		}
+	case "cert":
+		if err := runCert(os.Args[2:]); err != nil {
+			log.Fatalf("sund: %v", err)
+		}
 	case "health":
 		if err := runHealth(os.Args[2:]); err != nil {
 			log.Fatalf("sund: %v", err)
@@ -58,7 +64,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, "usage: sund <serve|admin|health|version> [flags]\n")
+	fmt.Fprintf(os.Stderr, "usage: sund <serve|admin|cert|health|version> [flags]\n")
 }
 
 // envOr returns the environment variable named key, or def if it is unset or
@@ -75,6 +81,8 @@ func runServe(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	addr := fs.String("addr", envOr("SUND_ADDR", ":5870"), "listen address (env: SUND_ADDR)")
 	dbPath := fs.String("db", envOr("SUND_DB", "sund.db"), "path to the SQLite database file (env: SUND_DB)")
+	tlsDir := fs.String("tls-dir", envOr("SUND_TLS_DIR", ""),
+		"serve HTTPS with fingerprint-pinned certs stored here; empty = plain HTTP (env: SUND_TLS_DIR)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -91,8 +99,51 @@ func runServe(args []string) error {
 
 	pinger := push.NewUnifiedPush(&http.Client{Timeout: 10 * time.Second})
 	srv := server.New(server.Config{Version: version, Pinger: pinger}, st)
-	log.Printf("sund %s listening on %s (db=%s)", version, *addr, *dbPath)
+
+	if *tlsDir != "" {
+		id, err := tlsid.Load(*tlsDir)
+		if err != nil {
+			return fmt.Errorf("tls: %w", err)
+		}
+		log.Printf("sund %s listening on %s (https, db=%s)", version, *addr, *dbPath)
+		log.Printf("pinned address: sund://<host>%s#%s", portSuffix(*addr), id.Fingerprint)
+		return srv.RunTLS(ctx, *addr, id.ServerTLSConfig())
+	}
+
+	log.Printf("sund %s listening on %s (http, db=%s)", version, *addr, *dbPath)
 	return srv.Run(ctx, *addr)
+}
+
+// portSuffix returns the ":port" part of a listen address for the address hint.
+func portSuffix(addr string) string {
+	if i := strings.LastIndex(addr, ":"); i >= 0 {
+		return addr[i:]
+	}
+	return ""
+}
+
+// runCert handles TLS certificate operations. Only `fingerprint` exists so far.
+func runCert(args []string) error {
+	if len(args) < 1 || args[0] != "fingerprint" {
+		return fmt.Errorf("usage: sund cert fingerprint [--tls-dir DIR] [--host host:port]")
+	}
+	fs := flag.NewFlagSet("cert fingerprint", flag.ExitOnError)
+	tlsDir := fs.String("tls-dir", envOr("SUND_TLS_DIR", "certs"), "TLS certificate directory (env: SUND_TLS_DIR)")
+	host := fs.String("host", "", "host:port to print a full sund:// address")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+
+	id, err := tlsid.Load(*tlsDir)
+	if err != nil {
+		return fmt.Errorf("tls: %w", err)
+	}
+	if *host != "" {
+		fmt.Printf("sund://%s#%s\n", *host, id.Fingerprint)
+	} else {
+		fmt.Println(id.Fingerprint)
+	}
+	return nil
 }
 
 // runAdmin handles the operator surface. Only `account create` exists so far.

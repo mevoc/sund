@@ -10,10 +10,13 @@ match internal/sigauth byte-for-byte.
 """
 
 from .client import Client, Invitation, Queue, Sender, register_device, signing_string
+from .pinning import PinError, connect, parse_address, pinned_context
 
 __all__ = [
     "Client", "Invitation", "Queue", "Sender",
-    "register_device", "signing_string", "__version__",
+    "register_device", "signing_string",
+    "PinError", "connect", "parse_address", "pinned_context",
+    "__version__",
 ]
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"

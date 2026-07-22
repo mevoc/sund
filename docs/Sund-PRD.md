@@ -195,6 +195,20 @@ The QR bootstrap code carries this full address, so a new device pins the server
 identity on first contact. A man-in-the-middle on first connect is detected, not
 trusted.
 
+Two-layer certificates. The fingerprint is the SHA-256 of a long-lived offline
+CA's SubjectPublicKeyInfo. That CA signs a shorter-lived online (leaf)
+certificate used for the live TLS handshake, so the server can rotate the leaf
+without changing the pin — clients keep trusting the same address. The client
+disables WebPKI (no public CA, no hostname check) and accepts a connection only
+if a presented certificate's SPKI fingerprint matches the pin and the leaf
+validly chains to it. This needs no CA, no domain, and works on a bare IP or LAN;
+trust is anchored in the QR ceremony, the same physical co-presence that
+authenticates device pairing.
+
+Deployment note: this pinned-TLS mode is what the self-host story assumes, but a
+plain-HTTP Sund behind a TLS-terminating reverse proxy (ordinary WebPKI) remains
+a supported alternative for operators who prefer it.
+
 ---
 
 Push architecture

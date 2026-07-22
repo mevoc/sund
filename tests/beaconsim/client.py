@@ -63,10 +63,12 @@ def sign_headers(signing_key: SigningKey, method: str, path: str, body: bytes) -
 class Client:
     """An enrolled device: its identity key plus signed-request helpers."""
 
-    def __init__(self, base_url: str, device_id: str, signing_key: SigningKey):
+    def __init__(self, base_url: str, device_id: str, signing_key: SigningKey, verify=True):
         self.base_url = base_url.rstrip("/")
         self.device_id = device_id
         self.signing_key = signing_key
+        # verify: True (default), or a pinned ssl.SSLContext for a TLS server.
+        self._verify = verify
 
     @property
     def public_key_b64(self) -> str:
@@ -84,6 +86,7 @@ class Client:
             self.base_url + path,
             headers=self._headers(method, path, body),
             content=body,
+            verify=self._verify,
         )
 
     def get(self, path: str) -> httpx.Response:
@@ -154,19 +157,21 @@ class Client:
         r = self._request("POST", "/v1/queues", body)
         r.raise_for_status()
         data = r.json()
-        return Queue(self.base_url, data["recipient_id"], data["sender_id"], auth_key, enc_key)
+        return Queue(self.base_url, data["recipient_id"], data["sender_id"],
+                     auth_key, enc_key, verify=self._verify)
 
 
 class Queue:
     """The owner (recipient) side of a blind queue."""
 
     def __init__(self, base_url: str, recipient_id: str, sender_id: str,
-                 auth_key: SigningKey, enc_key: PrivateKey):
+                 auth_key: SigningKey, enc_key: PrivateKey, verify=True):
         self.base_url = base_url.rstrip("/")
         self.recipient_id = recipient_id
         self.sender_id = sender_id
         self.auth_key = auth_key
         self.enc_key = enc_key
+        self._verify = verify
 
     @property
     def encryption_public_key(self) -> bytes:
@@ -179,6 +184,7 @@ class Queue:
             self.base_url + path,
             headers=sign_headers(self.auth_key, method, path, body),
             content=body,
+            verify=self._verify,
         )
 
     def recv(self) -> list[dict]:
@@ -207,12 +213,13 @@ class Sender:
     recipient's encryption public key, both handed over out of band. Its per-queue
     key is bound on the first send."""
 
-    def __init__(self, base_url: str, sender_id: str, recipient_enc_pubkey: bytes):
+    def __init__(self, base_url: str, sender_id: str, recipient_enc_pubkey: bytes, verify=True):
         self.base_url = base_url.rstrip("/")
         self.sender_id = sender_id
         self._box = SealedBox(PublicKey(recipient_enc_pubkey))
         self._key = SigningKey.generate()
         self._bound = False
+        self._verify = verify
 
     def send(self, plaintext: bytes, ttl: int = 60, priority: bool = False) -> str:
         ciphertext = bytes(self._box.encrypt(plaintext))
@@ -223,7 +230,7 @@ class Sender:
         headers = sign_headers(self._key, "POST", path, body)
         if not self._bound:
             headers[HEADER_SENDER_KEY] = base64.b64encode(bytes(self._key.verify_key)).decode()
-        r = httpx.post(self.base_url + path, headers=headers, content=body)
+        r = httpx.post(self.base_url + path, headers=headers, content=body, verify=self._verify)
         r.raise_for_status()
         self._bound = True
         return r.json()["message_id"]
@@ -234,6 +241,7 @@ def register_device(
     token: str,
     push_endpoint: str = "",
     capabilities: str = "",
+    verify=True,
 ) -> Client:
     """Generate a fresh identity and enroll it against a one-time token."""
     signing_key = SigningKey.generate()
@@ -246,6 +254,7 @@ def register_device(
             "push_endpoint": push_endpoint,
             "capabilities": capabilities,
         },
+        verify=verify,
     )
     r.raise_for_status()
-    return Client(base_url, r.json()["device_id"], signing_key)
+    return Client(base_url, r.json()["device_id"], signing_key, verify=verify)

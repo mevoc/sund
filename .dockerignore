@@ -11,6 +11,10 @@ compose.yaml
 compose.override.*
 .env
 .env.example
+certs/
+*.crt
+*.key
+*.pem
 
 # Local build artifacts / data
 /sund

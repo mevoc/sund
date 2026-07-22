@@ -17,6 +17,7 @@ import time
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -30,6 +31,7 @@ class SundServer:
     db_path: Path
     binary: Path
     log_path: Path
+    tls_dir: Path | None = None
 
 
 def _go_binary() -> str:
@@ -56,25 +58,41 @@ def sund_binary(tmp_path_factory) -> Path:
     return out
 
 
-def _start_server(binary: Path, db_path: Path, log_path: Path):
+def _start_server(binary: Path, db_path: Path, log_path: Path, tls_dir: Path | None = None):
     """Launch sund against db_path, teeing its output to log_path. Returns
-    (proc, log_file, SundServer) once the server answers /health."""
+    (proc, log_file, SundServer) once the server answers /health. When tls_dir is
+    given the server serves HTTPS with pinned certs stored there."""
     port = _free_port()
     addr = f"127.0.0.1:{port}"
+    cmd = [str(binary), "serve", "--addr", addr, "--db", str(db_path)]
+    scheme = "http"
+    if tls_dir is not None:
+        cmd += ["--tls-dir", str(tls_dir)]
+        scheme = "https"
     log_file = open(log_path, "wb")
-    proc = subprocess.Popen(
-        [str(binary), "serve", "--addr", addr, "--db", str(db_path)],
-        stdout=log_file,
-        stderr=subprocess.STDOUT,
+    proc = subprocess.Popen(cmd, stdout=log_file, stderr=subprocess.STDOUT)
+    server = SundServer(
+        base_url=f"{scheme}://{addr}", db_path=db_path, binary=binary,
+        log_path=log_path, tls_dir=tls_dir,
     )
-    server = SundServer(base_url=f"http://{addr}", db_path=db_path, binary=binary, log_path=log_path)
     try:
-        _wait_until_ready(server.base_url, proc, log_path)
+        # Readiness just checks liveness; skip cert verification for TLS.
+        _wait_until_ready(server.base_url, proc, log_path, verify=(tls_dir is None))
     except Exception:
         proc.kill()
         log_file.close()
         raise
     return proc, log_file, server
+
+
+def _cert_fingerprint(binary: Path, tls_dir: Path) -> str:
+    """Generate (if absent) the TLS certs and return the pinned fingerprint,
+    via the same `sund cert fingerprint` command an operator would run."""
+    proc = subprocess.run(
+        [str(binary), "cert", "fingerprint", "--tls-dir", str(tls_dir)],
+        capture_output=True, text=True, check=True,
+    )
+    return proc.stdout.strip()
 
 
 def _stop(proc, log_file):
@@ -104,9 +122,9 @@ class SundLauncher:
         self.binary = binary
         self._running: list = []
 
-    def start(self, db_path: Path) -> SundServer:
+    def start(self, db_path: Path, tls_dir: Path | None = None) -> SundServer:
         log_path = db_path.with_name(f"{db_path.stem}-{len(self._running)}.log")
-        proc, log_file, server = _start_server(self.binary, db_path, log_path)
+        proc, log_file, server = _start_server(self.binary, db_path, log_path, tls_dir=tls_dir)
         self._running.append((proc, log_file, server))
         return server
 
@@ -214,16 +232,27 @@ def push_sink():
         server.shutdown()
 
 
-def _wait_until_ready(base_url: str, proc: subprocess.Popen, log_path: Path, timeout: float = 10.0):
+def _wait_until_ready(base_url, proc, log_path, timeout: float = 10.0, verify=True):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if proc.poll() is not None:
             out = log_path.read_text(errors="replace") if log_path.exists() else ""
             raise RuntimeError(f"sund exited before becoming ready:\n{out}")
         try:
-            r = httpx.get(f"{base_url}/health", timeout=0.5)
+            r = httpx.get(f"{base_url}/health", timeout=0.5, verify=verify)
             if r.status_code == 200:
                 return
         except httpx.TransportError:
             time.sleep(0.05)
     raise TimeoutError(f"sund did not become ready within {timeout}s")
+
+
+@pytest.fixture
+def tls_sund(sund_launcher, tmp_path):
+    """A running HTTPS Sund plus its pinned sund:// address."""
+    tls_dir = tmp_path / "certs"
+    fingerprint = _cert_fingerprint(sund_launcher.binary, tls_dir)
+    server = sund_launcher.start(tmp_path / "sund.db", tls_dir=tls_dir)
+    hostport = server.base_url.split("://", 1)[1]
+    address = f"sund://{hostport}#{fingerprint}"
+    return SimpleNamespace(server=server, address=address, fingerprint=fingerprint)

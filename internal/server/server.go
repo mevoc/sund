@@ -7,6 +7,7 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"net"
@@ -91,13 +92,27 @@ func New(cfg Config, st *store.Store) *Server {
 // socket.
 func (s *Server) Handler() http.Handler { return s.handler }
 
-// Run listens on addr and serves until ctx is cancelled, then shuts down
-// gracefully.
+// Run listens on addr (plain HTTP) and serves until ctx is cancelled.
 func (s *Server) Run(ctx context.Context, addr string) error {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
 	}
+	return s.serve(ctx, ln)
+}
+
+// RunTLS listens on addr and serves HTTPS with tlsConf until ctx is cancelled.
+func (s *Server) RunTLS(ctx context.Context, addr string, tlsConf *tls.Config) error {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	return s.serve(ctx, tls.NewListener(ln, tlsConf))
+}
+
+// serve runs the HTTP server over ln until ctx is cancelled, then shuts down
+// gracefully.
+func (s *Server) serve(ctx context.Context, ln net.Listener) error {
 	httpSrv := &http.Server{Handler: s.handler}
 	go func() {
 		<-ctx.Done()

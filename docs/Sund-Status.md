@@ -21,8 +21,9 @@ At a glance
 - Tests: a Go unit suite and a Python system suite (`beaconsim`) that drives the
   real compiled binary with real crypto. ~49 Go cases, ~29 system tests, both
   per-commit. Includes the blindness audit (S8) and operator-survival (S9).
-- Not yet built: iOS push provider, in-binary TLS / fingerprint pinning, metrics.
-  See "Not built yet".
+- Not yet built: iOS push provider, metrics. TLS/fingerprint pinning is
+  implemented as an opt-in mode (`serve --tls-dir`); making it the default is a
+  follow-up. See "Not built yet".
 
 ---
 
@@ -91,9 +92,9 @@ HTTP API (implemented endpoints)
 
 Request/response shapes are JSON; payloads are base64 ciphertext. See
 `Sund-ImplementationGuide.md` for the sketch and `tests/beaconsim/` for a working
-client. The binary serves plain HTTP on its listen address (default `:5870`); TLS
-termination and certificate-fingerprint pinning are deployment-layer (reverse
-proxy) and not in the binary yet — see "Not built yet".
+client. The binary serves plain HTTP by default; `serve --tls-dir DIR` switches
+it to HTTPS with fingerprint pinning (see Transport security). A reverse proxy
+for WebPKI TLS also remains supported.
 
 ---
 
@@ -158,6 +159,15 @@ Behavior details a consumer should know
   note). A revoked or cross-account target 404s; a device's bundle is cleared on
   revocation. Bundles are public key material, not secrets, and are distinct from
   blob/object storage (a Non-goal).
+- Transport security: `serve --tls-dir DIR` serves HTTPS with a two-layer cert —
+  a long-lived offline CA (auto-generated in DIR) whose SPKI SHA-256 is the pin,
+  signing a rotatable leaf. `sund cert fingerprint --tls-dir DIR [--host host:port]`
+  prints the pin or a full `sund://host:port#fingerprint` address for the QR. The
+  client pins the CA fingerprint from the address, disables WebPKI/hostname
+  checks, and rejects any cert that doesn't match — first-connect MITM is
+  detected. Deleting the leaf (server.crt/server.key) rotates it without changing
+  the pin. `internal/tlsid` is the implementation; `tests/beaconsim/pinning.py` is
+  the client reference.
 - Multi-tenancy: accounts are isolated. Cross-account reads/sends/revokes fail.
 
 ---
@@ -167,8 +177,8 @@ Guarantees and residual metadata (for privacy docs)
 Defended: honest-but-curious and abusive host cannot read content, cannot
 impersonate a device (signed requests), cannot inject (sender-key binding), and
 cannot enumerate who-messages-whom from the schema (no stored sender↔recipient
-link). First-connect MITM is addressed by fingerprint pinning at the deployment
-layer (see caveat below). Replay is blocked by nonce+timestamp.
+link). First-connect MITM is addressed by the pinned-TLS mode (see Transport
+security). Replay is blocked by nonce+timestamp.
 
 Not hidden (a host can observe): traffic timing and sizes; queue ownership
 (recipient side); the push-ping fan-in (which device is woken when a queue
@@ -231,9 +241,11 @@ Run both with `make test-all`.
 
 Not built yet (relative to the PRD / API sketch)
 
-- In-binary TLS and the `sund://host:port#fingerprint` address / QR pinning: the
-  binary serves plain HTTP; TLS + fingerprint pinning are expected at the reverse
-  proxy and on the client, not yet produced or verified by Sund itself.
+- Pinned TLS is opt-in, not the default: plain HTTP remains the flagless default
+  and the container/compose still serve HTTP. Making pinned TLS the self-host
+  default (and enabling it in the image) is a follow-up. Client pinning is proven
+  in beaconsim (Python); the real clients (Android/iOS/web) must each implement
+  the same contract with platform-specific trust evaluation.
 - iOS push: the provider interface exists; only UnifiedPush/ntfy is implemented.
 - Metrics endpoint.
 - Storage quota is enforced sequentially-correct; under heavy concurrent sends to

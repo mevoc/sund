@@ -62,9 +62,14 @@ backend of `../family-beacon`. **Spec only, no code yet.**
   PRD 0.3.
 - `docs/Sund-Status.md` — **implementation snapshot** (what the binary actually
   does, for consumers — chiefly family-beacon — and contributors): as-built data
-  model, the 11 implemented endpoints, auth/signing contract, push/revocation/
-  quota behavior, the sund-client contract, test coverage, and an honest
-  "not built yet" list. Ground truth of the code; the PRD stays design intent.
+  model, the implemented endpoints, auth/signing contract, push/revocation/quota
+  behavior, transport security, the sund-client contract, test coverage, and an
+  honest "not built yet" list. Ground truth of the code; the PRD stays design intent.
+- `docs/Sund-Pinning-Contract.md` — **normative** transport-trust contract every
+  client (sund-client; family-beacon's Android/iOS/web) MUST implement for
+  pinned-TLS mode: the `sund://host:port#fingerprint` address, what is pinned
+  (SPKI SHA-256 of the offline CA), the verification algorithm, rotation, and the
+  MUST/MUST NOT rules. Keeps three client implementations from drifting.
 - `docs/Sund-PriorArt.md` — survey (July 2026): SimpleX SMP is the closest
   incumbent; the gap Sund fills (blind transport + account/device model) is
   unoccupied. Its five design implications are incorporated in PRD 0.2.

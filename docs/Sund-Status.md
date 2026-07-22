@@ -167,7 +167,8 @@ Behavior details a consumer should know
   checks, and rejects any cert that doesn't match — first-connect MITM is
   detected. Deleting the leaf (server.crt/server.key) rotates it without changing
   the pin. `internal/tlsid` is the implementation; `tests/beaconsim/pinning.py` is
-  the client reference.
+  the client reference; `Sund-Pinning-Contract.md` is the normative spec every
+  real client must implement.
 - Multi-tenancy: accounts are isolated. Cross-account reads/sends/revokes fail.
 
 ---
@@ -245,7 +246,8 @@ Not built yet (relative to the PRD / API sketch)
   and the container/compose still serve HTTP. Making pinned TLS the self-host
   default (and enabling it in the image) is a follow-up. Client pinning is proven
   in beaconsim (Python); the real clients (Android/iOS/web) must each implement
-  the same contract with platform-specific trust evaluation.
+  the same contract (now specified normatively in `Sund-Pinning-Contract.md`)
+  with platform-specific trust evaluation.
 - iOS push: the provider interface exists; only UnifiedPush/ntfy is implemented.
 - Metrics endpoint.
 - Storage quota is enforced sequentially-correct; under heavy concurrent sends to

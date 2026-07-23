@@ -1,24 +1,35 @@
 Sund — Client Pinning Contract
 
-Status: v0.1 (Draft, 2026-07-22)
+Status: v0.2 (Draft, 2026-07-23)
 
 This is the normative contract a Sund client (sund-client, and thus each Family
-Beacon platform — Android, iOS, web) MUST implement to connect to a Sund server
-running in pinned-TLS mode. It exists so three independent client implementations
-agree exactly, rather than drifting. It describes only the transport-trust layer;
-request signing, queues and payload encryption are specified elsewhere. Reference
-implementations: `internal/tlsid` (Go server + client) and
-`tests/beaconsim/pinning.py` (Python client). Key words MUST / SHOULD / MAY are
-used in the RFC 2119 sense.
+Beacon platform — Android, iOS, web) MUST implement to connect to a Sund server.
+It exists so three independent client implementations agree exactly, rather than
+drifting. It describes only the transport-trust layer; request signing, queues
+and payload encryption are specified elsewhere. Reference implementations:
+`internal/tlsid` (Go server + client) and `tests/beaconsim/pinning.py` (Python
+client). Key words MUST / SHOULD / MAY are used in the RFC 2119 sense.
 
-Background: the PRD (Server address) chooses a SimpleX-style pinning model over
-WebPKI. Identity is a pinned public key delivered out of band (the onboarding
-QR), not a CA-issued, hostname-bound certificate. This detects a first-connect
-man-in-the-middle without a public CA, a domain, or correct DNS.
+There are two transport-trust modes, and a client MUST implement both:
+
+- **Pinned mode** (§§1–7) — Sund terminates TLS itself with a self-signed
+  certificate; identity is a pinned public key delivered out of band. Needs no
+  CA, no domain and no correct DNS.
+- **WebPKI mode** (§8) — Sund runs as plain HTTP behind a TLS-terminating
+  reverse proxy holding a publicly trusted certificate; identity is the domain
+  name, verified normally.
+
+Which mode a deployment uses is the operator's choice and is fixed per server
+address (§8.1); the mode is never negotiated at connection time and never
+changes without re-pairing (§8.5). Background: the PRD (Server address) chooses
+the SimpleX-style pinning model as Sund's self-host default, because it detects
+a first-connect man-in-the-middle without a public CA, a domain, or correct DNS.
+WebPKI mode exists because some consumers need reachability on port 443 — see
+§8.6 — and because browsers cannot implement §4 at all.
 
 ---
 
-1. The server address
+1. The server address (pinned mode)
 
 A server address is a single string, delivered out of band (QR at onboarding,
 implementation guide Walkthrough 1/2):
@@ -33,6 +44,11 @@ implementation guide Walkthrough 1/2):
 
 Clients MUST store the (host, port, fingerprint) triple durably, associated with
 the account, and use the fingerprint for every subsequent connection.
+
+The fragment is REQUIRED under the `sund://` scheme. A `sund://` address with no
+fragment, or with a fragment that is not 64 lowercase hex characters, is
+malformed and MUST be rejected outright — a client MUST NOT treat it as a
+WebPKI address (§8.1 explains why this fails closed).
 
 ---
 
@@ -76,9 +92,9 @@ model and the only one Sund generates.
 
 ---
 
-4. Client verification algorithm (normative)
+4. Client verification algorithm (pinned mode, normative)
 
-On every connection the client MUST:
+On every connection to a `sund://` address the client MUST:
 
 1. Open a TLS 1.2+ connection to host:port. It MAY send SNI = host (ignored by
    the server for certificate selection).
@@ -137,7 +153,7 @@ Both MUST reach the same accept/reject decision for a given (chain, pin).
 
 ---
 
-6. Hard requirements (MUST / MUST NOT)
+6. Hard requirements (pinned mode, MUST / MUST NOT)
 
 - MUST reject on pin mismatch; MUST NOT retry the same connection without the pin.
 - MUST NOT fall back to WebPKI/system-trust TLS, to an unpinned connection, or to
@@ -169,10 +185,124 @@ Does not protect:
 
 ---
 
-8. Alternative deployment (informative)
+8. WebPKI mode (normative)
 
 An operator may instead run Sund as plain HTTP behind a TLS-terminating reverse
-proxy using ordinary WebPKI (a public CA and domain). In that mode this contract
-does not apply and clients use standard platform TLS verification. Pinned TLS is
-the self-host-first default this document specifies; the WebPKI-proxy path is a
-supported alternative, not described further here.
+proxy holding a publicly trusted certificate. §§2–7 do not apply to such a
+deployment; this section replaces them. Everything above the transport —
+signed requests, queue authentication, payload encryption — is unchanged and
+mode-independent.
+
+8.1 The WebPKI server address
+
+    sund+webpki://<host>[:<port>]
+
+- host — the DNS name. Unlike pinned mode, the host IS the identity: it is what
+  the certificate is checked against. An IP literal MUST be rejected.
+- port — optional TCP port; default 443 when omitted.
+- There is NO fragment. An address under this scheme carrying a fragment is
+  malformed and MUST be rejected.
+
+Clients MUST store the (scheme, host, port) triple durably, associated with the
+account, and MUST use the stored scheme to select the verification algorithm on
+every subsequent connection.
+
+Why a distinct scheme rather than "a `sund://` address with the fingerprint
+omitted": that alternative fails open. An attacker who can strip the fragment
+from an address before the user scans or types it would silently downgrade a
+pinned deployment to one where any certificate from any public CA is accepted —
+a downgrade achieved by deletion, the cheapest possible edit. With two explicit
+schemes, deleting the fragment from a `sund://` address produces an address that
+is malformed under §1 and rejected, and no deletion turns `sund://` into
+`sund+webpki://`. Mode is stated, never inferred.
+
+8.2 Client verification algorithm (normative)
+
+On every connection the client MUST:
+
+1. Open a TLS 1.2+ connection to host:port, sending SNI = host.
+2. Perform the platform's standard trust evaluation, unmodified: build and
+   verify the chain to the platform trust store, enforce validity windows, and
+   verify the hostname against the certificate's SAN entries (a match on CN
+   alone MUST NOT be accepted).
+3. If verification fails for any reason → REJECT. Do not proceed, do not retry
+   with verification relaxed.
+4. Only if step 2 passes may the client send or receive application data.
+
+This is deliberately "do the normal thing." A client MUST NOT install extra
+trust anchors, MUST NOT disable hostname verification, and MUST NOT implement
+its own chain-building for this mode. The correct implementation is the
+platform's default TLS client with no options changed.
+
+8.3 Hard requirements (MUST / MUST NOT)
+
+- MUST NOT connect over plain HTTP in either mode, and MUST NOT fall back to
+  plain HTTP if TLS fails.
+- MUST NOT fall back between modes in either direction. A `sund+webpki://`
+  address whose verification fails MUST NOT be retried as pinned, and the §6
+  prohibition on a pinned address falling back to WebPKI stands unchanged.
+- MUST NOT offer a "trust anyway" / "accept invalid certificate" affordance.
+  This is the same rule as §5 and matters more here, because certificate errors
+  in WebPKI mode are common enough operationally (expiry, renewal failure,
+  captive portals) that users learn to click through them.
+- MUST reject an IP-literal host under `sund+webpki://` (§8.1).
+- SHOULD surface certificate-validation failures as a distinct, explicable
+  state ("cannot verify the server's identity") rather than as a generic
+  network error, so an intercepting network is distinguishable from an offline
+  one.
+
+8.4 What WebPKI mode protects, and what it costs
+
+Compared with pinned mode, this is a weaker trust model, and clients and
+consumer products MUST NOT describe it as equivalent:
+
+- Trust widens from one operator-held key to the entire public CA ecosystem:
+  any trusted CA can issue a certificate for the domain, so a compromised or
+  coerced CA anywhere can mint a working interception certificate. Pinned mode
+  has no such class of adversary.
+- Identity becomes dependent on DNS. An attacker controlling DNS plus a
+  fraudulent certificate is indistinguishable from the real server; under
+  pinning, DNS control alone achieves nothing.
+- The hostname is published in Certificate Transparency logs, permanently and
+  publicly, revealing that the domain runs a service (not what, nor for whom).
+
+What is unchanged: payloads are end-to-end encrypted independently of the
+transport, so confidentiality of message content is identical in both modes.
+The proxy is an additional component that sees request metadata in clear —
+it is inside the trust boundary the operator already occupies (§7, blindness
+model), but it is one more place that can log, and operators should keep its
+access logging off.
+
+Operators SHOULD publish CAA records restricting which CAs may issue for the
+domain. This narrows the first bullet without changing anything client-side.
+
+8.5 Mode changes are re-pairing events
+
+The mode is part of the stored server identity. A client holding a
+`sund://…#fingerprint` address MUST NOT accept a `sund+webpki://` address for
+the same account, or the reverse, as a silent update: it MUST be treated
+exactly as the pin change of §5 — a distinct "server identity changed —
+re-verify" state, resolved out of band by the operator distributing a new
+address and the user re-verifying it. Migration between modes therefore
+re-pairs every device; operators should choose a mode before onboarding a
+family, not after.
+
+8.6 Choosing a mode (informative)
+
+Pinned mode is Sund's self-host-first default and the stronger model; prefer it
+where it is workable. Two things force WebPKI mode:
+
+- **Browsers.** A browser cannot implement §4 — there is no API to pin, and a
+  request to a self-signed origin fails. Any web client requires this mode.
+- **Reachability on port 443.** Pinned mode is typically served on a
+  non-standard port, which is blocked on many hotel, school, guest and
+  corporate networks. A consumer whose value depends on working away from home
+  may reasonably weigh this above the trust-model difference — Family Beacon
+  does exactly that and recommends WebPKI mode for all of its deployments (see
+  `../../family-beacon/ARCHITECTURE.md`, Deployment). Note that serving pinned
+  mode on :443 recovers reachability on networks that merely block ports, but
+  not on networks that intercept TLS: pinning correctly refuses those, so the
+  connection fails rather than silently downgrading.
+
+Sund takes no position on which a given consumer should pick. It specifies both
+so the choice is a deployment decision, not a fork in the client.

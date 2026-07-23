@@ -187,6 +187,16 @@ receives); on iOS, wake timing at the vendor gateway and Apple. In a small accou
 the anonymity set is small — Sund does not claim traffic-analysis resistance; it
 guarantees the graph is not *recorded*. Consuming apps must state this honestly.
 
+Trust boundary: every non-revoked device in an account is trusted equally. The
+device list is visible to all members, and the server enforces no "which member
+may reach which" policy. If a consumer publishes reachable key bundles, any member
+device can initiate to any peer; since quota is charged to the recipient and
+senders are pseudonymous (nothing to rate-limit), a hostile member can fill a
+victim's queues, and revocation is the only server-side remedy. Consumers that
+can't assume mutual trust use grant-only reachability (bundles without a self-serve
+address) and enforce peer-acceptance client-side. See PRD → Threat model (Trust
+boundary) and Devices → Key bundles (Reachability).
+
 The blindness claim is enforced by an executable audit (S8): after exercising the
 surface with known plaintext markers, the test opens the database and the server
 log and asserts the markers appear nowhere and no column links a sender to a

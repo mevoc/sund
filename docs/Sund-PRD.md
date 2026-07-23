@@ -93,8 +93,9 @@ Accounts
 Devices
 - Ed25519 keypair per device; the server stores the public key only.
 - Bootstrap: QR code carrying the server address (including certificate
-  fingerprint, see Server address) and a one-time token. Verification →
-  registration → the new device appears in the account's device list.
+  fingerprint in pinned mode, see Server address) and a one-time token.
+  Verification → registration → the new device appears in the account's device
+  list.
 - Invitations: enrollment tokens are single-use and short-lived (default TTL
   15 minutes, operator-configurable). A token is consumed atomically by the first
   successful registration; a second use, or use after expiry, fails closed.
@@ -128,6 +129,26 @@ Devices
   initial-message forward secrecy). Which of those a consumer picks is a
   client-protocol decision, and it is why the exact bundle *format* is the
   consumer's to define; Sund only stores and serves it.
+
+  Reachability is a consumer choice, not a Sund default. Knowing a device exists
+  does not make it addressable: sending requires a queue sender ID — a per-queue
+  secret the recipient minted — which the device list (device IDs only) never
+  reveals. What can turn "I can see you" into "I can reach you" is a published
+  bundle that carries an initiation address, the convenience that enables async
+  mesh pairing. So consumers pick their own reachability topology on the same
+  server:
+    - Grant-only reachability: bundles carry no self-serve address; a device is
+      reachable only by peers it has explicitly handed a sender ID (out of band
+      or via a pairing message). The device list stays a harmless directory, the
+      account is not a fully-connected mesh, and no server permission or stored
+      graph is needed. This is how a consumer confines a newly invited device to
+      its inviter until further introductions are made.
+    - Published-bundle mesh: bundles carry a reachable address, so any member can
+      initiate with any offline peer without ceremony. This scales pairing (the
+      reason bundles exist) at the cost of making every member reachable — and
+      spammable — by every other (see Threat model → Trust boundary).
+  Neither needs a server change; the lever is entirely the consumer's bundle
+  format, which is another reason Sund leaves that format to the consumer.
 
 Queues
 - A queue is a unidirectional channel owned by one recipient device, created by
@@ -186,14 +207,26 @@ There is deliberately no sender_device column anywhere in the transport plane.
 
 Server address
 
-A Sund server address embeds the fingerprint of the server's offline certificate
-(SimpleX pattern), e.g.:
+A server address is what the QR bootstrap code carries, and it determines how the
+client establishes transport trust. There are two modes, and the address states
+which — it is never negotiated at connection time. Both are first-class; the
+scheme is the discriminator. Normative client contract:
+`Sund-Pinning-Contract.md` (v0.2).
 
-sund://host:port#<certificate-fingerprint>
+Pinned mode — sund://host:port#<certificate-fingerprint>
 
-The QR bootstrap code carries this full address, so a new device pins the server
-identity on first contact. A man-in-the-middle on first connect is detected, not
-trusted.
+The address embeds the fingerprint of the server's offline certificate (SimpleX
+pattern), so a new device pins the server identity on first contact. A
+man-in-the-middle on first connect is detected, not trusted.
+
+WebPKI mode — sund+webpki://host[:port]
+
+Sund runs as plain HTTP behind a TLS-terminating reverse proxy holding a
+publicly trusted certificate. Identity is the domain name, verified by the
+platform's ordinary TLS stack (chain to the system trust store, SAN hostname
+check). No fingerprint travels in the address, and the absence of one is not how
+the mode is signalled — a distinct scheme is, so that stripping a fragment
+cannot silently downgrade a pinned deployment.
 
 Two-layer certificates. The fingerprint is the SHA-256 of a long-lived offline
 CA's SubjectPublicKeyInfo. That CA signs a shorter-lived online (leaf)
@@ -205,9 +238,30 @@ validly chains to it. This needs no CA, no domain, and works on a bare IP or LAN
 trust is anchored in the QR ceremony, the same physical co-presence that
 authenticates device pairing.
 
-Deployment note: this pinned-TLS mode is what the self-host story assumes, but a
-plain-HTTP Sund behind a TLS-terminating reverse proxy (ordinary WebPKI) remains
-a supported alternative for operators who prefer it.
+Choosing between them. Pinned mode is the stronger model and remains Sund's
+self-host-first default: trust rests on one operator-held key delivered by
+physical co-presence, rather than on the public CA ecosystem (any trusted CA can
+issue for a domain) and on DNS. It also needs no CA, no domain and no correct
+DNS, which is what makes "install and run it on your own box" true.
+
+WebPKI mode is not a concession to operators who dislike certificates; two
+things force it. A browser cannot pin — there is no API for it, and a request to
+a self-signed origin fails — so any web client requires WebPKI. And pinned mode
+is typically served on a non-standard port, which is blocked on many hotel,
+school, guest and corporate networks; a consumer whose value depends on working
+away from home may rationally weigh reachability above the trust-model
+difference. Family Beacon does exactly that and recommends WebPKI mode for all
+of its deployments. Sund takes no position on which a given consumer picks — it
+specifies both so the choice is a deployment decision rather than a fork in the
+client.
+
+What does not change with the mode: payloads are end-to-end encrypted
+independently of the transport, so message confidentiality is identical either
+way, and the blindness model is untouched. What does: WebPKI mode publishes the
+hostname in Certificate Transparency logs, and the proxy is one more component
+inside the operator's trust boundary that can log request metadata. A mode
+change on a running deployment re-pairs every device (contract §8.5), so the
+choice belongs before onboarding, not after.
 
 ---
 
@@ -293,6 +347,30 @@ Explicitly NOT hidden — residual metadata a host can observe:
 - On iOS, wake timing (though nothing else) is additionally visible to the vendor
   push gateway and to Apple — see Push architecture.
 
+Trust boundary — the account. Sund trusts every non-revoked device in an account
+equally. It has no notion of which member may see or talk to which: the device
+list is visible to all members, and reachability between them is governed entirely
+by the consumer's pairing protocol (see Devices → Key bundles, Reachability).
+Consequences a consumer must weigh:
+
+- A compromised or malicious member device can enumerate the account's device
+  list and, if the consumer publishes reachable bundles, initiate to any peer
+  unsolicited.
+- Because quota is attributed to the recipient and senders are pseudonymous (no
+  sender_device to rate-limit), such a member can consume a victim's quota by
+  filling its queues; the transport plane cannot throttle per sender.
+- Revocation is the only server-side remedy against a member turned hostile: any
+  device may revoke another, killing its identity key and queue access at once.
+
+This is the right boundary for Sund's first consumers — a user's own devices, or a
+cooperating family. A consumer whose account may hold mutually-distrusting devices
+must not publish self-serve reachable bundles (use grant-only reachability) and
+must enforce peer-acceptance in the client. A server-enforced authorization model —
+a stored "may-talk-to" graph — is deliberately out of scope: it is application
+policy, it reintroduces a form of the relationship metadata Sund refuses to record,
+and it should be built, if ever, only when a consumer forces it, as an optional
+mode with that cost stated (the discipline applied to blob storage).
+
 Sund does not claim traffic-analysis resistance. Consuming apps must state this
 honestly in their privacy documentation.
 
@@ -373,6 +451,17 @@ surfaced by the implementation guide, plus the test strategy:
     family-beacon's ARCHITECTURE.md has been updated accordingly (its original
     Kotlin/Ktor + PostgreSQL sketch is superseded for the server). Clients
     remain free in their stacks.
+11. Two transport-trust modes, both first-class. Decision 4 of PRD 0.2 chose the
+    fingerprint-pinned address; it stands, and pinned mode remains the
+    self-host-first default. What changes is that the WebPKI-proxy deployment is
+    no longer an unspecified footnote: it has a normative address form
+    (`sund+webpki://host[:port]`) and client algorithm in
+    `Sund-Pinning-Contract.md` §8, because family-beacon adopted it as its
+    recommended deployment for port-443 reachability and because a web client
+    cannot pin at all. A distinct scheme rather than a fingerprint-less
+    `sund://`, so that stripping a fragment fails closed instead of silently
+    downgrading. Clients implement both; there is no fallback between them, and
+    switching modes re-pairs every device.
 
 Open decisions remaining
 

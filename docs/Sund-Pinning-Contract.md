@@ -299,7 +299,8 @@ where it is workable. Two things force WebPKI mode:
   corporate networks. A consumer whose value depends on working away from home
   may reasonably weigh this above the trust-model difference — Family Beacon
   does exactly that and recommends WebPKI mode for all of its deployments (see
-  `../../family-beacon/ARCHITECTURE.md`, Deployment). Note that serving pinned
+  https://github.com/mevoc/family-beacon/blob/main/ARCHITECTURE.md, Deployment).
+  Note that serving pinned
   mode on :443 recovers reachability on networks that merely block ports, but
   not on networks that intercept TLS: pinning correctly refuses those, so the
   connection fails rather than silently downgrading.

@@ -95,10 +95,9 @@ CI and repo housekeeping
     runs as the local pre-commit hook (a plain script, no hook framework), since
     it alone is guaranteed fast enough (< 5 s) not to slow down commits.
 
-    No git repository exists in this directory yet. `git init`, plus deciding on
-    hosting (a private GitHub repo, matching the pattern in Skerry's CLAUDE.md,
-    is the natural default absent a reason otherwise), is itself the first step
-    before any of the above.
+    Done: the repository is hosted publicly at github.com/mevoc/sund (MIT), so
+    its first consumer — family-beacon, itself public — can pull both the source
+    and the GHCR image from CI without credentials.
 
 ---
 
@@ -369,12 +368,12 @@ matters to a consumer: a change here that is internally consistent, passes S1–
 and still breaks the real client library on the other side.
 
 The remedy is to run the consumer's own contract suite in this repo's CI: a job
-that checks out `../family-beacon` at a pinned ref and runs its tier-2 suite
-(enrollment, signing, queue lifecycle, revocation, quota, both address forms of
-the pinning contract) against the binary just built here. Same test code as the
-consumer runs; run from the other side, at the moment the change is made rather
-than a week later. Design and tiers:
-`../../family-beacon/docs/FamilyBeacon-Testing.md`.
+that checks out github.com/mevoc/family-beacon at a pinned ref and runs its
+tier-2 suite (enrollment, signing, queue lifecycle, revocation, quota, both
+address forms of the pinning contract) against the binary just built here. Same
+test code as the consumer runs; run from the other side, at the moment the
+change is made rather than a week later. Design and tiers:
+https://github.com/mevoc/family-beacon/blob/main/docs/FamilyBeacon-Testing.md
 
 Family Beacon runs the mirror image of this — a scheduled canary against Sund
 `main` — so the loop is closed from both ends. The two jobs are not redundant:

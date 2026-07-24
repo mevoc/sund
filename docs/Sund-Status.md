@@ -3,8 +3,8 @@ Sund — Implementation Status
 Status: v0.1 (snapshot, 2026-07-20) — describes the code, not the plan
 
 This is a snapshot of what the Sund binary actually does as of the storage-quota
-commit, written for the people who build on it — chiefly `../family-beacon`, the
-first consumer — and for contributors. Where it and the PRD disagree, the PRD
+commit, written for the people who build on it — chiefly family-beacon
+(github.com/mevoc/family-beacon), the first consumer — and for contributors. Where it and the PRD disagree, the PRD
 (`Sund-PRD.md`) is the design intent and this document is the ground truth of the
 implementation. Rationale lives in the PRD and `Sund-ImplementationGuide.md`; this
 file is the "what exists today" reference.
@@ -229,8 +229,9 @@ What a client (sund-client) must implement
 
 Payload encryption is entirely the client's concern. beaconsim uses X25519
 SealedBox as a stand-in; family-beacon's real session crypto (double-ratchet or
-Noise, per `../family-beacon/docs/FamilyBeacon-Protocol-0_1.md`) rides inside the
-same opaque payload — the server is indifferent to it.
+Noise, per
+https://github.com/mevoc/family-beacon/blob/main/docs/FamilyBeacon-Protocol.md)
+rides inside the same opaque payload — the server is indifferent to it.
 
 ---
 

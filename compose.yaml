@@ -2,8 +2,8 @@
 #
 # This runs just the relay. A real self-hosting stack — a UnifiedPush distributor
 # (ntfy) for Android wake-up and a TLS-terminating reverse proxy — is a consumer
-# concern; see ../family-beacon. Sund speaks plain HTTP and must sit behind a
-# proxy for any internet-facing deployment.
+# concern; see github.com/mevoc/family-beacon. Sund speaks plain HTTP and must
+# sit behind a proxy for any internet-facing deployment.
 #
 # Quick start:
 #   cp .env.example .env         # then edit if you like

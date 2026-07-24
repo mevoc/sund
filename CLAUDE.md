@@ -13,7 +13,13 @@ The server transports sealed envelopes; it never interprets them.
 **"Sund" is the working name** (Swedish: a strait between islands — the channel
 between skerries; also "sound, healthy"). Extracted from Skerry (`../skerry`)
 as its kernel: Sund is Skerry's Layer-1 identity/messaging service, and the actual
-backend of `../family-beacon`. **Spec only, no code yet.**
+backend of [family-beacon](https://github.com/mevoc/family-beacon).
+
+**Implemented and running.** Both planes work, plus push wake-up, device
+revocation, key bundles and per-account quota, with a Go unit suite and a Python
+system suite per commit and a container image published to GHCR. See
+`docs/Sund-Status.md` for what the binary actually does; the PRD stays design
+intent.
 
 ---
 
@@ -32,13 +38,14 @@ backend of `../family-beacon`. **Spec only, no code yet.**
 
 ## Relationships
 
-- `../family-beacon` — first consumer; formally adopted Sund as its backend
-  (July 2026), closing its decisions #1 (E2EE) and #3 (Skerry coupling).
-  Push-provider problem (#2) is shared.
+- [family-beacon](https://github.com/mevoc/family-beacon) — first consumer;
+  formally adopted Sund as its backend (July 2026), closing its decisions #1
+  (E2EE) and #3 (Skerry coupling). Push-provider problem (#2) is shared.
 - `../skerry` — grows around Sund; its PRD references Sund as Layer 1
-  rather than respecifying it.
+  rather than respecifying it. (Not public.)
 - The generic client library (`sund-client`: identity, pairing, sessions,
-  queues, push) is scoped in `../family-beacon/docs/FamilyBeacon-Protocol-0_1.md`
+  queues, push) is scoped in
+  [FamilyBeacon-Protocol.md](https://github.com/mevoc/family-beacon/blob/main/docs/FamilyBeacon-Protocol.md)
   (Layering). It belongs conceptually to Sund and may move here when built.
 - Supersedes the Layer-1 subset of
   `../skerry/docs/FamilyBeacon-MicroCloud-0_5.md`.
@@ -53,7 +60,8 @@ backend of `../family-beacon`. **Spec only, no code yet.**
   15-min TTL, revocable), device-list changes push + mandatory refetch, and a
   per-commit test strategy (unit + system suites, blindness audit). Stack locked
   July 2026: Go + SQLite (family-beacon ARCHITECTURE.md updated to match).
-  Remaining open: iOS gateway operations, blob module, rotation policy.
+  Remaining open: iOS gateway operations. (Blob storage and queue rotation are
+  resolved — see the PRD's "Resolved since first listed as open".)
 - `docs/Sund-ImplementationGuide.md` — companion to PRD 0.3: components, API
   sketch (two planes), walkthroughs for first-device onboarding and second-device
   invitation (SimpleX-style QR bootstrap), each step mapped to Family Beacon.

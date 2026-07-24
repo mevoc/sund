@@ -15,10 +15,10 @@ interprets them. (Working name.)
 
 ## Status
 
-Both planes work, with push wake-up, device revocation, and per-account storage
-quota wired in, and the blindness (S8) and operator-survival (S9) audits pass.
-The remaining items are open design decisions (iOS APNS gateway, key bundles,
-queue-rotation policy). Implemented endpoints:
+Both planes work, with push wake-up, device revocation, key bundles and
+per-account storage quota wired in, and the blindness (S8) and operator-survival
+(S9) audits pass. One design decision is still open: iOS APNS gateway
+operations. Implemented endpoints:
 
 | Method & path               | Auth                | Purpose                              |
 | --------------------------- | ------------------- | ------------------------------------ |
@@ -150,4 +150,4 @@ docker exec sund /sund admin account create
 
 The server speaks plain HTTP; terminate TLS at a reverse proxy in front of it. A
 full self-hosting stack (with a UnifiedPush distributor and TLS) is a consumer
-concern — see `../family-beacon`.
+concern — see [family-beacon](https://github.com/mevoc/family-beacon).

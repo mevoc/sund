@@ -361,6 +361,42 @@ S9 Operator surface — with undelivered messages in queues: cp the DB (backup),
 CI runs both suites on every commit; the unit suite additionally runs as a
 pre-commit hook. Exceeding the time targets above is treated as a regression.
 
+Consumer contract tests (planned)
+
+Both suites above test Sund against itself and against beaconsim — an
+implementation this repo also owns. Neither can catch the failure that actually
+matters to a consumer: a change here that is internally consistent, passes S1–S9,
+and still breaks the real client library on the other side.
+
+The remedy is to run the consumer's own contract suite in this repo's CI: a job
+that checks out `../family-beacon` at a pinned ref and runs its tier-2 suite
+(enrollment, signing, queue lifecycle, revocation, quota, both address forms of
+the pinning contract) against the binary just built here. Same test code as the
+consumer runs; run from the other side, at the moment the change is made rather
+than a week later. Design and tiers:
+`../../family-beacon/docs/FamilyBeacon-Testing.md`.
+
+Family Beacon runs the mirror image of this — a scheduled canary against Sund
+`main` — so the loop is closed from both ends. The two jobs are not redundant:
+this one blocks a bad Sund change at the source, that one catches drift the
+pinned ref is hiding.
+
+Note that the test-vector dependency runs the same way. Sund's suites must track
+Family Beacon's protocol test vectors, which are canonical in that repo under
+`shared/protocol/testvectors/` and consumed here by checkout at a pinned ref — not
+vendored. Two copies of a conformance corpus drift, and drift in the corpus hides
+drift in the implementations.
+
+Two prerequisites, both currently open:
+
+- The GHCR package is private while this repo is. A consumer's CI that pulls
+  `ghcr.io/mevoc/sund` needs a read-packages token or a public package.
+- The image declares no `HEALTHCHECK`; `compose.yaml` supplies it. Moving
+  `HEALTHCHECK ["CMD", "/sund", "health"]` into the Dockerfile would make the
+  image self-describing everywhere — including GitHub Actions `services:`, whose
+  `--health-cmd` is shell-form only and therefore cannot probe a distroless
+  image at all — and would let compose files drop their healthcheck blocks.
+
 ---
 
 Open items surfaced by this guide — resolved in PRD 0.3

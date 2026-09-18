@@ -35,6 +35,11 @@ const (
 	leafValidity = 397 * 24 * time.Hour      // rotatable online cert
 )
 
+// ErrIdentity is wrapped by every error verifyPinned returns, so a client can
+// tell "the server is not who the pin says" from a plain network failure
+// (Sund-Pinning-Contract.md §5, §8.3).
+var ErrIdentity = errors.New("tls: server identity does not match the pin")
+
 // Identity is the loaded certificate material plus the pinned fingerprint.
 type Identity struct {
 	ca          *x509.Certificate
@@ -98,13 +103,13 @@ func SPKIFingerprint(cert *x509.Certificate) string {
 
 func verifyPinned(rawCerts [][]byte, fingerprint string) error {
 	if len(rawCerts) == 0 {
-		return errors.New("tls: server presented no certificate")
+		return fmt.Errorf("%w: server presented no certificate", ErrIdentity)
 	}
 	certs := make([]*x509.Certificate, 0, len(rawCerts))
 	for _, raw := range rawCerts {
 		c, err := x509.ParseCertificate(raw)
 		if err != nil {
-			return err
+			return fmt.Errorf("%w: %v", ErrIdentity, err)
 		}
 		certs = append(certs, c)
 	}
@@ -117,7 +122,7 @@ func verifyPinned(rawCerts [][]byte, fingerprint string) error {
 		}
 	}
 	if pinned == nil {
-		return errors.New("tls: server certificate does not match the pinned fingerprint")
+		return fmt.Errorf("%w: no presented certificate matches the pinned fingerprint", ErrIdentity)
 	}
 
 	roots := x509.NewCertPool()
@@ -126,12 +131,14 @@ func verifyPinned(rawCerts [][]byte, fingerprint string) error {
 	for _, c := range certs[1:] {
 		inters.AddCert(c)
 	}
-	_, err := certs[0].Verify(x509.VerifyOptions{
+	if _, err := certs[0].Verify(x509.VerifyOptions{
 		Roots:         roots,
 		Intermediates: inters,
 		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-	})
-	return err
+	}); err != nil {
+		return fmt.Errorf("%w: %v", ErrIdentity, err)
+	}
+	return nil
 }
 
 func loadOrCreateCA(certPath, keyPath string) (*x509.Certificate, *ecdsa.PrivateKey, error) {

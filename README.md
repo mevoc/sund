@@ -122,7 +122,9 @@ The address embeds the SHA-256 of a long-lived offline CA; that CA signs a
 rotatable leaf used for the live handshake, so the leaf can be rotated (delete
 `server.crt`/`server.key`) without changing the pin. A client pins the fingerprint
 from the address and rejects any certificate that doesn't match — a first-connect
-MITM is detected, not trusted. `tests/beaconsim/pinning.py` is a reference client.
+MITM is detected, not trusted. `tests/beaconsim/pinning.py` is a reference client,
+and `client/` is the Go client package (`github.com/mevoc/sund/client`) implementing
+both trust modes, request signing and both planes.
 
 ## Container image
 

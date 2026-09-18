@@ -206,8 +206,11 @@ queue.
 
 What a client (sund-client) must implement
 
-`tests/beaconsim/` is a working reference (Python). A production client
-(family-beacon's Android/iOS/web) implements the same contract:
+`client/` is the Go implementation of the contract (importable as
+`github.com/mevoc/sund/client`; first consumer: Postiljon), and
+`tests/beaconsim/` is the Python reference the system suite drives. A
+production client (family-beacon's Android/iOS/web) implements the same
+contract:
 
 1. Device identity: generate an Ed25519 keypair; the private key never leaves the
    device.
@@ -292,6 +295,8 @@ Code map
       queue.go              queues, messages, quota-enforcing append
       quota.go              quota classes
     internal/sigauth/       canonical signing string + header names
+    client/                 Go client: address parsing (both trust modes),
+                            request signing, Device / Recipient / Sender
     internal/push/          Pinger interface, UnifiedPush, Noop
     tests/beaconsim/        reference client (Python)
     tests/                  system suite (pytest)

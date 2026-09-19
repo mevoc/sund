@@ -46,7 +46,9 @@ intent.
 - The generic client library (`sund-client`: identity, pairing, sessions,
   queues, push) is scoped in
   [FamilyBeacon-Protocol.md](https://github.com/mevoc/family-beacon/blob/main/docs/FamilyBeacon-Protocol.md)
-  (Layering). It belongs conceptually to Sund and may move here when built.
+  (Layering). Family Beacon's is Rust; the **Go** implementation of the
+  transport half (address modes, signing, both planes; no payload crypto) lives
+  here in `client/` and is what `../postiljon` builds on.
 - Supersedes the Layer-1 subset of
   `../skerry/docs/FamilyBeacon-MicroCloud-0_5.md`.
 

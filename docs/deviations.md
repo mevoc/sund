@@ -121,3 +121,33 @@ CI). Those are tracked in `Sund-Status.md` → "Not built yet".
 - Why: never set up; CI covers the gate.
 - Status: open. Either add the script (and a `make hooks` target to install it) or
   remove the sentence from the guide.
+
+## 2026-09-20 — Sends into another account's queue are not refused
+
+- Spec: `Sund-PRD.md` → Non-goals — "No cross-account or federated messaging in V1";
+  `Sund-ImplementationGuide.md` → S7 — "Tenant isolation — two accounts on one server:
+  cross-account queue reads, sends, bundle fetches and device-list reads all fail."
+- Actual: `POST /v1/send/{sender_id}` authenticates with the per-queue sender key alone
+  (`internal/server/transport.go`); no account is consulted. A holder of a sender
+  credential can append to a queue owned by any account, and the server cannot tell
+  which account — if any — they belong to. The isolation tests cover the management
+  plane only (`internal/store/store_test.go` → `TestCrossAccountIsolation` for the
+  device list, `bundles_test.go`, `revoke_test.go`, `tests/test_devices.py`); no test
+  exercises a cross-account send.
+- Why: the transport plane is deliberately pseudonymous. A send carries no device id,
+  and no column links a sender to a queue, so the server would have to record the
+  sender↔account link that the blindness guarantee (S8) exists to avoid. In that sense
+  the code is right and the two spec sentences are the ones out of step: the isolation
+  Sund actually offers is on the management plane and on the recipient side of a queue.
+  `Sund-Status.md` → Multi-tenancy ("cross-account reads/sends/revokes fail") reads as
+  the spec does and needs the same scoping.
+- Status: open. Surfaced by `../postiljon` PRD v0.3 §7.1 and `../brygga` PRD v0.2
+  BIND-1, which both depend on the current behaviour: Postiljon and Brygga are devices
+  in separate accounts so that neither can revoke the other's queues, and publishers
+  hold a per-queue sender credential while belonging to no account at all. Two ways to
+  close it:
+  (a) scope the PRD non-goal, S7 and `Sund-Status.md` to the management plane and the
+  recipient side, and add a system test that a cross-account *read* fails while a send
+  succeeds — recommended, since it documents what the design already guarantees; or
+  (b) enforce per-account sends, which reintroduces the sender↔account link, contradicts
+  S8, and would force Postiljon and Brygga to share one account. André decides.

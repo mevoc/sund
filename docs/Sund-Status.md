@@ -22,8 +22,8 @@ At a glance
 - Tests: a Go unit suite and a Python system suite (`beaconsim`) that drives the
   real compiled binary with real crypto. ~49 Go cases, ~29 system tests, both
   per-commit. Includes the blindness audit (S8) and operator-survival (S9).
-- Not yet built: the account administration model of PRD 0.4 (trust modes,
-  device roles), iOS push provider, metrics. TLS/fingerprint pinning is
+- Not yet built: the account administration model of PRD 0.4 (administration
+  modes, device roles), iOS push provider, metrics. TLS/fingerprint pinning is
   implemented as an opt-in mode (`serve --tls-dir`); making it the default is a
   follow-up. See "Not built yet".
 
@@ -140,10 +140,12 @@ Behavior details a consumer should know
   and retires every queue the device owns (dropping their messages). The revoked
   device's signed requests then fail and its queues 404. The account's other
   devices are pinged to refetch and rotate. **Any device in an account may revoke
-  any other, including itself** — the binary has no role model. PRD 0.4 replaces
-  this with an optional per-account administration model (flat/managed accounts,
-  `admin`/`member` roles); none of it is implemented, so a consumer must not rely
-  on a revocation being gated today. A revoked device stays listed, flagged
+  any other, including itself** — the binary has no role model. PRD 0.4 adds an
+  optional per-account administration model (flat/managed accounts,
+  `admin`/`member` roles) on top of this; none of it is implemented, so a consumer
+  must not rely on a revocation being gated today. As built, the behaviour is
+  exactly PRD 0.4's `flat` mode, which is also what family-beacon's roster spec
+  requires. A revoked device stays listed, flagged
   revoked.
 - Quota: per account, counted on the owner (recipient) side. A send that would
   exceed `quota_bytes` is refused with 507; space frees as messages are acked or
@@ -264,13 +266,16 @@ Run both with `make test-all`.
 
 Not built yet (relative to the PRD / API sketch)
 
-- Account administration (PRD 0.4, decision 12): `accounts.trust_mode`,
+- Account administration (PRD 0.4, decision 12): `accounts.admin_mode`,
   `devices.role`, `invitations.grants_role`, `POST /v1/devices/{id}/role`, the
   admin-only checks on revoke and invitation minting, the last-admin invariant,
-  and role in the device-list response. Nothing of it exists: today every device
-  is effectively an admin, which is exactly PRD 0.4's `flat` mode, so
-  implementing it should be additive rather than a behaviour change for existing
-  deployments (an existing database migrates to `flat`).
+  `sund admin account create --admin-mode` and `sund admin device promote`, role
+  in the device-list response, and the two new ping triggers (a role change and
+  an invitation mint must wake the account's other devices; today only
+  registration and revocation do). Nothing of it exists: today every device is
+  effectively an admin, which is exactly PRD 0.4's `flat` mode, so implementing
+  it should be additive rather than a behaviour change for existing deployments
+  (an existing database migrates to `flat`).
 - Pinned TLS is opt-in, not the default: plain HTTP remains the flagless default
   and the container/compose still serve HTTP. Making pinned TLS the self-host
   default (and enabling it in the image) is a follow-up. Client pinning is proven
@@ -283,7 +288,9 @@ Not built yet (relative to the PRD / API sketch)
   one account a small overshoot is possible (self-correcting). Fine at the target
   scale; noted for honesty.
 
-Open design decisions (PRD): only iOS gateway operations remains genuinely open.
+Open design decisions (PRD): iOS gateway operations, and whether administrative
+acts should be signed by the acting device so peers can verify them without
+trusting the server (open decision 2, added in PRD 0.4).
 Blob/object storage is a Non-goal (add when a consumer needs it), and queue
 rotation is client-driven by design — the create/retire primitives plus a
 fail-closed 404 for a stale sender suffice, and no server-assisted redirect is

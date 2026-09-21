@@ -20,9 +20,9 @@ per-account storage quota wired in, and the blindness (S8) and operator-survival
 (S9) audits pass. Two design decisions are still open: iOS APNS gateway
 operations, and whether administrative acts should be signed by the acting device
 so peers can verify them without trusting the server. PRD 0.4's optional account
-administration model (trust modes, device roles) is specified but **not yet
-implemented** — today every device in an account may revoke any other. Implemented
-endpoints:
+administration model (flat/managed accounts, device roles) is specified but **not
+yet implemented** — today every device in an account may revoke any other, which
+is what the spec calls a flat account. Implemented endpoints:
 
 | Method & path               | Auth                | Purpose                              |
 | --------------------------- | ------------------- | ------------------------------------ |
@@ -45,8 +45,10 @@ endpoints:
 **Revocation** is one atomic step: the target's identity key dies, its push
 endpoint is cleared, and every queue it owns is retired with its messages
 dropped. The account's other devices are pinged to refetch the list and rotate
-their own queues. Any device in an account may revoke another (an admin-role
-restriction, if wanted, is app-level policy).
+their own queues. Any device in an account may revoke another — as built there
+is no role model. PRD 0.4 specifies an optional per-account administration mode
+that gates this behind an `admin` role; it is not implemented, and it is opt-in
+per account when it is.
 
 **Storage quota** is per account, attributed to the queue owner's side (so
 senders stay pseudonymous). A send that would push an account's stored payloads

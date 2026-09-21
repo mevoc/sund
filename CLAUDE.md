@@ -54,22 +54,33 @@ intent.
 
 ## Docs
 
-- `docs/Sund-PRD.md` — **current (v0.3).** Two-plane architecture, pseudonymous
+- `docs/Sund-PRD.md` — **current (v0.4).** Two-plane architecture, pseudonymous
   queues, device list/revocation/key bundles, push architecture (UnifiedPush/ntfy
   on Android; vendor APNS gateway on iOS — pluggable provider interface),
-  fingerprint-pinned server address, one-binary stack requirement. New in 0.3:
-  push-ping fan-in stated in the threat model, invitation semantics (single-use,
-  15-min TTL, revocable), device-list changes push + mandatory refetch, and a
-  per-commit test strategy (unit + system suites, blindness audit). Stack locked
-  July 2026: Go + SQLite (family-beacon ARCHITECTURE.md updated to match).
-  Remaining open: iOS gateway operations. (Blob storage and queue rotation are
+  fingerprint-pinned server address, one-binary stack requirement. New in 0.4:
+  an optional per-account administration model — `flat` (default, unchanged) vs.
+  `managed` accounts, an `admin`/`member` device role, and admin-only revocation
+  and invitation minting. Self-revocation is unconditional, an account never
+  loses its last admin to an act performed on another device, and no
+  administrative act is invisible to a *conforming* client (Sund pings every
+  other device and publishes role; whether a client surfaces either is the
+  consumer's obligation and unverifiable server-side). **Opt-in and
+  contested:** family-beacon's roster spec as written is incompatible with it on
+  anti-stalkerware grounds (no privileged remover), and PRD 0.4 records the
+  conflict rather than settling it — raise it, don't pick a winner. From
+  0.3: push-ping fan-in in the threat model, invitation semantics (single-use,
+  15-min TTL, revocable), device-list changes push + mandatory refetch, a
+  per-commit test strategy (unit + system suites, blindness audit), and the
+  stack lock, July 2026: Go + SQLite (family-beacon
+  ARCHITECTURE.md updated to match). Remaining open: iOS gateway operations,
+  signed administrative statements. (Blob storage and queue rotation are
   resolved — see the PRD's "Resolved since first listed as open".)
-- `docs/Sund-ImplementationGuide.md` — companion to PRD 0.3: components, API
+- `docs/Sund-ImplementationGuide.md` — companion to PRD 0.4: components, API
   sketch (two planes), walkthroughs for first-device onboarding and second-device
   invitation (SimpleX-style QR bootstrap), each step mapped to Family Beacon.
   Also the test strategy: unit + system suites (both per-commit), the beaconsim
-  client mockup, scenarios S1–S9. Its three surfaced open items are resolved in
-  PRD 0.3.
+  client mockup, scenarios S1–S9 (plus S5b/S5c for administration). Its four
+  surfaced open items are resolved in PRD 0.3 and 0.4.
 - `docs/Sund-Status.md` — **implementation snapshot** (what the binary actually
   does, for consumers — chiefly family-beacon — and contributors): as-built data
   model, the implemented endpoints, auth/signing contract, push/revocation/quota

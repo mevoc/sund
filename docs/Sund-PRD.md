@@ -2,17 +2,20 @@ Sund
 
 «A blind strait between your devices.»
 
-Status: PRD v0.3 (Draft) — supersedes PRD 0.2
+Status: PRD v0.4 (Draft) — supersedes PRD 0.3
 
 > Working name: **Sund** (Swedish: a strait between islands — the channel between
 > skerries; also "sound, healthy"). The kernel extracted from Skerry
-> (`../skerry`). This revision folds in the three open items surfaced by
-> `Sund-ImplementationGuide.md` (July 2026): push-ping fan-in made explicit in
-> the threat model, invitation semantics specified, and device-list change
-> propagation decided. It also adds the per-commit test strategy (decision 9)
-> and locks the stack: Go + SQLite (decision 10). The changes are listed at the
-> end under "Decisions in this revision"; PRD 0.2's five decisions carry over
-> unchanged.
+> (`../skerry`). This revision adds one thing: an optional per-account
+> administration model (decision 12). An account may now restrict revoking a
+> device, minting an invitation and changing a role to devices holding an admin
+> role, instead of granting all three to every device equally. The flat account
+> of PRD 0.3 remains the default and is unchanged in behaviour, and the mode is
+> opt-in per account, and family-beacon's roster spec as written is incompatible
+> with it on anti-stalkerware grounds — a conflict recorded under Threat model →
+> Administration rather than settled here. The change is listed at the end under
+> "Decisions in this revision"; the eleven decisions of PRD 0.2 and 0.3 carry
+> over unchanged.
 
 ---
 
@@ -71,7 +74,9 @@ Principles
 
 - Blind by construction. Public keys, encrypted payloads, minimal routing metadata.
   Nothing to leak, nothing for a host to covertly read.
-- Infrastructure, not application. All business logic lives in clients.
+- Infrastructure, not application. All business logic lives in clients. The one
+  class of rule Sund does enforce is authorization over its *own* operations, for
+  the reason set out in Threat model → Trust boundary.
 - Multi-tenant by design. Accounts are fully isolated.
 - Self-host first. One small static binary, one database file. Install. Deploy.
   Backup. Upgrade. (The Holm bar.)
@@ -89,6 +94,15 @@ Accounts
 - Multi-tenant isolation, per-account quotas, root-admin provisioning.
 - Quotas are attributed to the queue owner's account (the recipient side — the
   side the server knows). Senders stay pseudonymous without breaking accounting.
+- Administration mode: an account is `flat` (default) or `managed`, chosen at
+  provisioning and not changeable afterwards — there is no endpoint for it, and
+  that refusal is the whole specification. It decides which role a device gets
+  when it registers, and whether roles may be changed at all — see Devices →
+  Roles and administration. A `flat` account behaves as PRD 0.3 did, with one
+  addition that applies in both modes: minting an invitation now pings the
+  account. Named *administration* mode to stay clear
+  of the two **transport**-trust modes of decision 11, which are an unrelated
+  axis.
 
 Devices
 - Ed25519 keypair per device; the server stores the public key only.
@@ -98,17 +112,118 @@ Devices
   list.
 - Invitations: enrollment tokens are single-use and short-lived (default TTL
   15 minutes, operator-configurable). A token is consumed atomically by the first
-  successful registration; a second use, or use after expiry, fails closed.
-  Outstanding invitations are listable and revocable from any authorized device —
-  a mis-shared QR can be killed before it is used.
+  successful registration; a second use, or use after expiry, fails closed. A
+  token also carries the role its bearer will hold, so a device never exists in
+  an account before its role is settled, and minting one wakes the account's
+  other devices like any other administrative act. Outstanding invitations are
+  listable by
+  every device and revocable by every device — including in a managed account,
+  deliberately: killing an invitation is fail-safe (it denies an enrollment and
+  destroys nothing), so the fastest possible response to a mis-shared QR is worth
+  more than the ability of a hostile member to be obstructive.
 - Explicit device list: every device in an account can see all registered devices
-  (id, created, last_seen, capabilities). Revocation is a first-class operation;
-  a revoked device's identity key and queue access die immediately.
-- Device-list change propagation: any change to the account's device list
-  (registration, revocation) triggers a contentless ping to the account's other
-  devices; on waking, a client refetches the device list. Pings are best-effort —
-  clients MUST additionally refetch the device list before establishing any new
-  session or pairing, so a missed ping costs latency, never security.
+  (id, role, created, last_seen, capabilities). Revocation is a first-class
+  operation; a revoked device's identity key and queue access die immediately,
+  and its undelivered messages are dropped along with its queues. Revocation is
+  destructive and has no undo — part of why an account may want it gated.
+- Device-list change propagation: every administrative act — registration,
+  revocation, role change and invitation minting — triggers a contentless ping to
+  every device in the account other than the one that performed it, never only to
+  the admins. This includes an operator-side `sund admin device promote`, which
+  pings *every* device since no device performed it: the host is the one party
+  the role model cannot bind, so it must not also hold the only silent role
+  change. A revocation pings its target too — it is a device the act was
+  performed on, and the one with most reason to be told — so the ping is
+  attempted *before* the target's push endpoint is cleared, in the same step; an
+  unreachable target learns instead from its next request, which fails closed, and
+  a consumer that promises a removed device will be told cannot rely on the ping
+  alone. Because a ping carries nothing, a woken client cannot know *which* act
+  fired it: the rule is to refetch the device list and the invitation list on any
+  ping, not to refetch selectively. Pings are best-effort — clients MUST
+  additionally refetch the device list before establishing any new session or
+  pairing, so a missed ping costs latency, never security.
+- Roles and administration: each device holds a role, `admin` or `member`. The
+  account's administration mode decides which role a *newly registered* device
+  gets — in a `flat` account every device registers as an admin; in a `managed`
+  account a device registers with the role its invitation granted, defaulting to
+  `member`. The first device of an account is always an admin. Authorization is
+  then one rule. Two of its three clauses are evaluated identically in both modes
+  — flat is simply the case where every device is an admin, not a second code
+  path — and the third is the one place the mode itself is consulted:
+
+    - Admin only: revoking another device, minting an invitation.
+    - Any device, always: listing devices and invitations, revoking an
+      outstanding invitation, revoking *itself*, and the whole transport plane.
+    - Changing a device's role: admin only, and refused outright in a `flat`
+      account. Flat means "every device is an admin" as a property of the
+      account, not as a coincidence of the current rows — so there is nothing to
+      promote and nothing to demote, and a flat account cannot be walked into a
+      managed one one demotion at a time.
+
+  **A device may always revoke itself**, with no exception, including the last
+  admin. Withholding self-revocation protects nothing — a device can discard its
+  own key regardless — and it is the one act a device must always be able to
+  perform on itself. It is also the only remedy a member has against an admin,
+  which is why it is unconditional rather than merely usual.
+
+  One invariant the server enforces: **an account never loses its last admin to
+  an act performed on another device.** The last non-revoked admin cannot be
+  demoted, and cannot be revoked by a different device; promoting a second admin
+  first is the only way through. The check and the write are one transaction, so
+  two admins revoking each other concurrently cannot both pass — one of them
+  becomes the last admin and its revocation is refused. That is a requirement,
+  not an implementation note: evaluated outside a transaction the invariant is
+  merely usually true, which is the same as false. It deliberately does not
+  extend to
+  self-revocation, so one bad state stays reachable: the sole admin of a managed
+  account can leave, stranding members who can then neither invite nor revoke.
+  Sund makes that recoverable from outside rather than preventing it —
+  `sund admin device promote <device-id>` is the operator's way back in — and a
+  consumer SHOULD keep a second admin in any managed account. Promote is refused
+  against a revoked device, and in a flat account, where every non-revoked device
+  is already an admin and there is nothing to promote. A single-device
+  account self-revoking is the degenerate case: an empty account, nobody
+  stranded.
+
+  **No silent administration** is the second requirement, and it splits by who
+  can be held to it:
+
+    - Sund's half, which is testable: role is a field of the device list every
+      device reads, and every administrative act — registration, revocation, role
+      change, invitation minting — pings every other device in the account, never
+      only the admins.
+    - The consumer's half, which Sund requires and cannot verify: a client MUST
+      render each device's role, and MUST surface an administrative change to the
+      user rather than silently absorbing the ping. A client that does neither is
+      still contract-conformant and administers covertly; Sund has no way to
+      know. This is an obligation of the same kind as "consuming apps must state
+      the residual metadata honestly", and it is backed by the same thing —
+      the consumer's own review, not the server.
+
+  A refused attempt is invisible, and that is worth naming rather than leaving to
+  be discovered: a member that probes for escalation — trying to revoke a peer,
+  mint an invitation, promote itself — changes nothing, so nothing pings and
+  nothing is stored. Recording the attempt would mean recording the actor and its
+  target, which is the edge the model exists to avoid. Sund accepts unobserved
+  probing as the price of storing no administration log; a consumer that wants
+  failed attempts surfaced has to carry them client-side.
+
+  What a member learns is bounded on purpose. It sees the account's current roles
+  and is woken whenever they change; it does not learn *which* admin acted, or
+  when. Sund records no actor and no history for an administrative act, because
+  an "X revoked Y" row would be precisely the device→device edge the data model
+  refuses. The transparency on offer is "you can always see the current
+  distribution of power, and you are always told when it moved" — not an audit
+  trail. A consumer that wants one builds it client-side, ledgered end-to-end,
+  where it is not the host's to read.
+
+  This is the first asymmetry of power Sund's substrate encodes, and it is
+  deliberately the smallest one that closes the hole: a per-device attribute, not
+  a relationship. It is not a permission system and does not grow into one. It
+  says nothing about which device may reach which — that stays the consumer's,
+  and stays unrecorded (Threat model → Trust boundary). It is also optional, and
+  there is a serious argument that a family-shaped consumer should decline it —
+  see Threat model → Administration.
 - Key bundles: each device may publish a small, size-capped, opaque blob of
   client-side key material (e.g. prekeys for X3DH-style async session setup),
   retrievable by other devices in the account. The server never interprets it —
@@ -183,7 +298,9 @@ Push wake-up
 - A ping carries nothing — no payload, no queue ID. It only tells a device
   "check in"; the client then drains its queues over the API.
 - Pings are sent on message arrival (transport plane, via queue ownership) and on
-  device-list changes (management plane, see Devices).
+  every administrative act — registration, revocation, role change and invitation
+  minting (management plane, see Devices). A mint changes no device list, which is
+  why the trigger is the act and not the list.
 - Delivery paths differ fundamentally per platform — see Push architecture.
 
 Health and metrics endpoints.
@@ -192,16 +309,24 @@ Health and metrics endpoints.
 
 Data model (the whole of it)
 
-accounts     — id, created, quota, status
-devices      — id, account_id, public_key, push_endpoint, capabilities, created,
-               last_seen, revoked
+accounts     — id, created, quota, status, admin_mode
+devices      — id, account_id, public_key, role, push_endpoint, capabilities,
+               created, last_seen, revoked
 bundles      — device_id, blob (opaque, size-capped), updated
-invitations  — token_hash, account_id, created, expires, consumed
+invitations  — token_hash, account_id, created, expires, consumed, grants_role
 queues       — recipient_id, sender_id, owner_device, recipient_key, sender_key,
                created, retired
 messages     — queue_id, payload, received_at, ttl, status
 
 There is deliberately no sender_device column anywhere in the transport plane.
+
+The three columns added in 0.4 — admin_mode, role and grants_role — are
+attributes of an account, a device and a token. None of them is an edge: nothing
+here records a relationship between two devices, in either plane. Nor is one
+created at runtime — an administrative act is evaluated and applied, never
+recorded with its actor, so there is no "X revoked Y" row and no administration
+log anywhere in the schema. That is the line the model is built to stay behind,
+and it is why it offers current-state transparency rather than an audit trail.
 
 ---
 
@@ -324,9 +449,18 @@ Defended against:
 - Abusive host (the Family Beacon scenario): cannot read content, cannot
   impersonate a device (signed requests), cannot inject (clients verify sender
   keys), cannot silently enumerate who messages whom from the schema.
-- Stolen or leaked invitation QR: tokens are single-use with a short TTL and can
-  be revoked before use; a consumed token registers a device that is immediately
-  visible in every account member's device list — no silent enrollment.
+- Stolen or leaked invitation QR: tokens are single-use with a short TTL, can be
+  revoked before use by any device, and minting one already pinged the account; a
+  consumed token registers a device that is immediately visible in every member's
+  device list — no silent enrollment. The blast radius varies with the role the
+  token grants: a stolen admin-granting invitation enrolls a device that can then
+  revoke and enroll, which is a reason to mint those sparingly and to prefer a
+  short TTL still.
+- Member device turned hostile, in a managed account: it cannot revoke another
+  device, enroll one of its own, or change a role. In a flat account it can do
+  all three — that is the mode's stated cost, not a defect. The converse case, an
+  *admin* turned hostile, is not defended against and is the strongest argument
+  against using the mode at all; both are argued under Administration.
 - First-connect MITM: certificate fingerprint pinned via the server address.
 - Replay: signed requests with nonces/timestamps.
 
@@ -344,32 +478,115 @@ Explicitly NOT hidden — residual metadata a host can observe:
   traffic timing can often guess the sender despite pseudonymous queues. The
   improvement over PRD 0.1 is that the graph is not *recorded*; it is not that
   traffic analysis is defeated.
+- Who acted on whom, in live traffic: a revocation or role change carries the
+  acting device's id in its signature headers and names its target in the path,
+  so a host watching requests sees the pair even though nothing stores it. This
+  is the management-plane twin of push-ping fan-in — runtime, not recorded — and
+  the same honesty applies: the binary keeps no access log (it logs errors only),
+  so the claim holds today at runtime as well as in the schema, but a host that
+  chose to log would learn it.
+- The account's administration shape, from all three columns 0.4 adds:
+  `admin_mode` tells a host whether an account is flat or managed before any
+  device has registered; `role` tells it which device administers a managed
+  account; and `grants_role` tells it, at mint time, that an account is about to
+  add an admin rather than a member. A flat account exposes only the first, and
+  exposes it uniformly.
 - On iOS, wake timing (though nothing else) is additionally visible to the vendor
   push gateway and to Apple — see Push architecture.
 
-Trust boundary — the account. Sund trusts every non-revoked device in an account
-equally. It has no notion of which member may see or talk to which: the device
-list is visible to all members, and reachability between them is governed entirely
-by the consumer's pairing protocol (see Devices → Key bundles, Reachability).
-Consequences a consumer must weigh:
+Trust boundary — the account. Sund has no notion of which member may see or talk
+to which: the device list is visible to all members, and reachability between them
+is governed entirely by the consumer's pairing protocol (see Devices → Key
+bundles, Reachability). What 0.4 changes is narrower than it sounds — the account
+is still the trust boundary, and every non-revoked device in it is still trusted
+to read the device list and to use the transport plane. Only three acts are
+gated — revoking another device, minting an invitation, changing a role — of the
+four the propagation rule calls administrative; the fourth, registration, is
+gated by holding a valid token instead. Consequences a consumer must weigh:
 
 - A compromised or malicious member device can enumerate the account's device
   list and, if the consumer publishes reachable bundles, initiate to any peer
-  unsolicited.
+  unsolicited. A managed account does not change this.
 - Because quota is attributed to the recipient and senders are pseudonymous (no
   sender_device to rate-limit), such a member can consume a victim's quota by
-  filling its queues; the transport plane cannot throttle per sender.
-- Revocation is the only server-side remedy against a member turned hostile: any
-  device may revoke another, killing its identity key and queue access at once.
+  filling its queues; the transport plane cannot throttle per sender. A managed
+  account does not change this either — the remedy is still revocation, now by an
+  admin rather than by anyone.
+- In a flat account, revocation is the remedy against a member turned hostile and
+  is equally available *to* that member: any device may revoke any other. A
+  managed account is the answer to that symmetry.
 
-This is the right boundary for Sund's first consumers — a user's own devices, or a
-cooperating family. A consumer whose account may hold mutually-distrusting devices
-must not publish self-serve reachable bundles (use grant-only reachability) and
-must enforce peer-acceptance in the client. A server-enforced authorization model —
-a stored "may-talk-to" graph — is deliberately out of scope: it is application
-policy, it reintroduces a form of the relationship metadata Sund refuses to record,
-and it should be built, if ever, only when a consumer forces it, as an optional
-mode with that cost stated (the discipline applied to blob storage).
+Two kinds of restriction, and why only one of them belongs in the server. Sund's
+rule is that a restriction lives wherever it can actually be enforced:
+
+- Reachability is client-enforceable. A sender ID is a secret the recipient minted
+  and handed over; the server never brokers one. A consumer that withholds it has
+  enforced the restriction completely, without the server knowing a thing. So
+  "who may talk to whom" stays out of Sund — a stored may-talk-to graph remains
+  deliberately out of scope, because it is application policy *and* it would
+  reintroduce exactly the relationship metadata Sund refuses to record.
+- Administration is not. Revocation, enrollment and role changes are operations
+  the *server* performs; only the server can refuse one. PRD 0.3 called an admin
+  restriction "app-level policy", which does not hold up: a client-side rule that
+  only the parent's phone may revoke is enforced solely by the device it
+  restricts, and a member turned hostile just signs the request itself. That is
+  the hole decision 12 closes, and it is closed with a per-device attribute
+  rather than a graph, at the cost stated under Administration.
+
+This remains the right boundary for Sund's consumers. Which mode an account runs
+is the consumer's decision and is not a function of how family-shaped it is — a
+family may rationally choose flat, and Sund's first consumer does; see
+Administration. A consumer whose account may hold mutually-distrusting devices
+must still not publish self-serve reachable bundles (use grant-only reachability)
+and must still enforce peer-acceptance in the client; roles substitute for
+neither.
+
+Administration — what the role model binds, and what it does not. Roles are
+enforced by the server, so they constrain the account's own devices and nothing
+else. A hostile host can ignore a role bit, revoke any device it likes, invent an
+enrollment or lie about who holds admin, exactly as it could before 0.4. The model
+defends against two things and claims no more:
+
+- Mistakes. Revocation is destructive and has no undo (it drops the target's
+  undelivered messages along with its queues), and in a flat account every device
+  can do it to every other. This is the common case the model is for.
+- A member turned hostile. In a managed account a compromised member device can
+  no longer wipe the account's other devices or enroll one of its own.
+
+It does not defend against the host and must not be documented as if it does. The
+upgrade that would partly bind the host — having the acting admin sign an
+administrative statement so peers verify it instead of trusting the server — is
+Open decision 2.
+
+Nor does it defend against a hostile *admin*, and that is the serious argument
+against the mode rather than a footnote to it. A member's only remedy against an
+admin is to revoke itself and leave, which is exactly why self-revocation carries
+no exception. Family Beacon, Sund's first consumer, has a roster rule that
+predates this mode and is incompatible with it for exactly this reason. Its
+wording is worth quoting rather than paraphrasing: `FamilyBeacon-Roster.md`
+(Removal) is normative that "any active device may remove any other device —
+there is no privileged remover", because "concentrating removal in an 'admin'
+would hand exactly the wrong person a lock", and it judges the
+permissive rule's failure mode (eviction: loud, ledgered, recoverable by
+re-pairing) preferable to the restrictive rule's (a person trapped in a family
+they cannot alter). Sund does not overrule that and is not in a position to: it
+cannot see a family. `flat` is the default, `managed` is opt-in per account, and
+a consumer is free never to offer it — which is where family-beacon's rule as
+written leaves it. Whether any
+family-shaped consumer should use managed mode is a cross-repo question this
+revision raises and does not settle.
+
+The anti-stalkerware note, since a consumer will ask: a managed account is the
+first place where Sund's substrate lets one device act on another. What makes it
+acceptable is the visibility requirement in Devices → Roles and administration —
+power in an account is visible to the devices it is held over, and every
+administrative act wakes them. The limit belongs in the same sentence: that makes
+covert administration *detectable by a conforming client*, not impossible. Pings
+are contentless, and Sund cannot see whether a client renders role or surfaces
+the change, so a client that swallows both administers covertly and Sund will
+never know. Devices that must not be subject to another's administration at all
+do not belong in the same account: the account is the isolation boundary, and
+always was.
 
 Sund does not claim traffic-analysis resistance. Consuming apps must state this
 honestly in their privacy documentation.
@@ -378,7 +595,9 @@ honestly in their privacy documentation.
 
 Non-goals
 
-- No application logic, ever (see Architecture Principle).
+- No application logic, ever (see Architecture Principle). Decision 12's
+  administration model is authorization over Sund's own operations, not
+  application logic; the distinction is argued in Threat model → Trust boundary.
 - No server-side cryptography beyond verifying request signatures. Key bundles are
   stored, never interpreted. No key escrow, no recovery.
 - No blob/object storage in V1. First candidate extension, deferred until a
@@ -419,8 +638,9 @@ Decisions in this revision
 
 The five decisions of PRD 0.2 (SimpleX queue addressing, UnifiedPush/ntfy push
 leg, Signal-style device management, fingerprint-pinned server address,
-one-binary stack requirement) carry over unchanged. New in 0.3 — the three items
-surfaced by the implementation guide, plus the test strategy:
+one-binary stack requirement) carry over unchanged. Items 6–11 were added in 0.3:
+the three open items surfaced by the implementation guide, the test strategy, the
+stack lock and the second transport-trust mode. Item 12 is new in 0.4:
 
 6. Push-ping fan-in made explicit. Confirmed: resolving queue → owner device at
    delivery time is the only transport→management linkage in the system, the
@@ -462,6 +682,26 @@ surfaced by the implementation guide, plus the test strategy:
     `sund://`, so that stripping a fragment fails closed instead of silently
     downgrading. Clients implement both; there is no fallback between them, and
     switching modes re-pairs every device.
+12. Optional per-account administration. An account is `flat` (the default, and
+    0.3's behaviour: every device registers as an admin and may do everything) or
+    `managed` (devices register as members; revoking another device and minting
+    an invitation become admin-only, and roles become changeable at all). The
+    reason this is a server concern and not, as PRD 0.3 had it, app-level policy:
+    revocation is a server operation, so a client-side rule restricting it is
+    enforced only by the very device it restricts. Reachability, by contrast, is
+    genuinely client-enforceable and therefore stays the consumer's. Costs,
+    stated rather than designed away: the three new columns are readable by the
+    host (Threat model, residual metadata); the model binds members, not the host
+    (Administration); and it does not bind a hostile admin either, which is why
+    self-revocation is unconditional and why family-beacon's roster rule, written
+    before this mode existed, is incompatible with it on anti-stalkerware grounds
+    — a conflict this revision records instead of resolving. One server-enforced
+    invariant keeps an account administrable: it never loses its last admin to an
+    act performed on another device (self-revocation excepted, with an operator
+    recovery path). Scope discipline:
+    two roles, one flag, no permission system, no actor recorded for any
+    administrative act; the account stays the trust boundary and no may-talk-to
+    graph is introduced.
 
 Open decisions remaining
 
@@ -470,6 +710,18 @@ Open decisions remaining
    batching/jitter to blunt timing analysis at the gateway. The architecture
    itself is settled in Push architecture; "no lock-in" is structurally
    unattainable on iOS — only containment is.
+2. Signed administrative statements. A role change or revocation is a server-side
+   fact, which a hostile host can fabricate — a forged revocation is enough to
+   make honest peers drop a device's queues and re-key. The fix is for the acting
+   admin to sign the statement, for Sund to store it opaquely, and for peers to
+   verify it against the device list — exactly how key bundles are already stored
+   and verified, so no server-side crypto is added and the dead-drop rule holds.
+   The server would keep the liveness half: it must actually stop serving a
+   revoked device, and it can deny service regardless. Open because the statement
+   format is a client-protocol decision (as the bundle format is) and because no
+   consumer has yet asked for administration that survives a hostile host.
+   Deferred, not rejected: 0.4's model is a mistake-and-member defence and says
+   so.
 
 Resolved since first listed as open (no longer decisions):
 

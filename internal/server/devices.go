@@ -58,9 +58,11 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleRevoke revokes a device in the caller's account. Any device in the
-// account may revoke any other (or itself); whether that should be limited to an
-// admin role is app-level policy, not Sund's. Cross-account targets 404 without
-// confirming they exist.
+// account may revoke any other (or itself) — equivalent to PRD 0.4's `flat`
+// administration mode, which is the default. PRD 0.4 also specifies an opt-in
+// `managed` mode gating this behind an admin role (it is a server-side rule
+// because only the server can refuse a server operation); none of that is
+// implemented yet. Cross-account targets 404 without confirming they exist.
 func (s *Server) handleRevoke(w http.ResponseWriter, r *http.Request) {
 	caller, ok := deviceFromContext(r.Context())
 	if !ok {

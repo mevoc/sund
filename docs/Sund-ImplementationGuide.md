@@ -1,7 +1,16 @@
 Sund — Implementation Guide
 
-Status: v0.2 (Draft) — companion to Sund-PRD.md
+Status: v0.3 (Draft) — companion to Sund-PRD.md
 
+> New in 0.3: the account administration model of PRD 0.4 — administration modes,
+> the `admin`/`member` role, the role-granting invitation and the last-admin
+> invariant — carried into the API sketch, the operator surface, both
+> walkthroughs, the revocation sketch and the test scenarios. It closes the
+> guide's own open item on who may revoke (see the end of this document). The
+> mode is opt-in and this guide takes no position on which one a consumer should
+> pick; PRD → Threat model → Administration carries the argument, including
+> family-beacon's decision to stay flat. Everything else is unchanged from 0.2.
+>
 > New in 0.2: a Toolchain section, settling the build/test/run tooling for the
 > first implementation step (July 2026). Two decisions of note: the SQLite driver
 > is `modernc.org/sqlite` (pure Go, no cgo), and the system suite's `beaconsim`
@@ -34,6 +43,12 @@ Operator surface (the Holm bar):
 
     sund serve --db sund.db --addr :5870
     sund admin account create --quota standard   → account id + first invitation
+        [--admin-mode flat|managed]              → administration mode (PRD 0.4);
+                                                   flat is the default
+    sund admin device promote <device-id>        → recover a managed account that
+                                                   lost its only admin; pings
+                                                   every device, like any other
+                                                   role change
     cp sund.db backup/                            → backup
     mv sund-new sund && systemctl restart sund    → upgrade
 
@@ -109,12 +124,42 @@ Management plane — requests signed with the device's Ed25519 identity key
 (headers: device id, timestamp, nonce, signature over method+path+body):
 
     POST /v1/devices/register        enroll with one-time token (unsigned + token)
-    GET  /v1/devices                 list account devices
-    POST /v1/devices/{id}/revoke     revoke a device
+    GET  /v1/devices                 list account devices (incl. role)
+    POST /v1/devices/{id}/revoke     revoke a device        [admin; always self]
+    POST /v1/devices/{id}/role       set a device's role    [admin; managed only]
     PUT  /v1/me/bundle               publish opaque key bundle (size-capped)
     GET  /v1/devices/{id}/bundle     fetch a peer's bundle
     PUT  /v1/me/push                 register push endpoint (UnifiedPush URL / token)
-    POST /v1/invitations             mint one-time enrollment token
+    POST /v1/invitations             mint one-time enrollment token  [admin]
+    GET  /v1/invitations             list outstanding invitations
+    POST /v1/invitations/{id}/revoke revoke one before use
+
+The bracketed markers are the administration rule of PRD 0.4 (Devices → Roles and
+administration). The admin check itself is not a mode switch in the handler:
+every device in a `flat` account registers as an admin, so the same check yields
+0.3's behaviour there. The mode is consulted in exactly one place — `/role`,
+below. Three things sit beside the check:
+
+- **Self-revocation is unconditional.** `POST /v1/devices/{id}/revoke` where the
+  id is the caller's own always succeeds, for any role, including the account's
+  last admin. Only revoking *another* device is gated.
+- **The last-admin invariant is a refusal, not a permission** (409): the last
+  non-revoked admin cannot be demoted, and cannot be revoked by a different
+  device. Recovery when it leaves anyway is operator-side —
+  `sund admin device promote <device-id>`.
+- **`/role` is refused in a flat account** (409) rather than being a no-op: flat
+  means every device is an admin by definition of the mode, so there is nothing
+  to promote or demote, and the account cannot be walked into managed one
+  demotion at a time. The mode itself has no endpoint at all.
+
+Every administrative act — register, revoke, role change *and* invitation mint —
+pings every device in the account except the one that performed it: not only the
+admins, and never silently. Two consequences a client implementer needs. A
+revocation pings its *target* as well, which means the ping goes out before the
+target's push endpoint is cleared, in the same step — best-effort, so an
+unreachable device learns from its next request instead. And since a ping carries
+nothing, a woken client cannot tell which act fired it: refetch the device list
+*and* the invitation list on any ping.
 
 Transport plane — requests authenticated with per-queue keys only. No device
 identity appears in these calls; that is the point:
@@ -143,9 +188,15 @@ device. Family Beacon mapping in brackets: [FB: …].
 Setup. Operator runs the binary and creates an account:
 
     $ sund admin account create
-    account:    acc_9f2
-    invitation: printed as QR + URL, one-time, short TTL
+    account:    acc_9f2  (administration: flat)
+    invitation: printed as QR + URL, one-time, short TTL, grants: admin
                 carries: server address (with fingerprint) + enrollment token
+
+(`flat` is the default and is PRD 0.3 behaviour: every device that enrolls
+becomes an admin. `--admin-mode managed` is the opt-in alternative, under which
+later enrollments default to `member`. The mode is fixed at provisioning — there
+is no endpoint to change it. Which one a consumer picks is a product decision
+with a real argument on each side: PRD → Threat model → Administration.)
 
 [FB: a parent installs the Family Beacon server on the family NAS. The account is
 the family. The CLI prints the "join our family" QR.]
@@ -175,6 +226,11 @@ Notes:
   devices can establish sessions with A asynchronously. Sund stores, never reads.
 - With one device there are no queues yet. A single-device account is valid but
   inert — Sund's unit of usefulness is the pair.
+- Device A is an admin whichever administration mode the account uses: the first
+  device of an account always is, because the last-admin invariant would
+  otherwise be unsatisfiable. In a managed account A is, for now, the only device
+  that can invite — and a managed account SHOULD gain a second admin before it
+  gains members, so that losing A is not an operator-recovery event.
 
 [FB: the parent's phone is now enrolled. The app shows "Family: 1 device". No
 location is flowing anywhere — there is no one to flow to, and the server could
@@ -192,15 +248,23 @@ carries the reverse direction.
 
 Step 1 — A prepares the invitation (management + transport plane):
 
-    A: POST /v1/invitations            → one-time enrollment token
+    A: POST /v1/invitations {grants_role: "member"}
+                                       → one-time enrollment token
     A: POST /v1/queues                 → Q1 {recipient_id: r1, sender_id: s1}
     A: displays QR containing:
        { server addr#fp, enrollment token, s1, A.pubkey, eph }
        where eph is an ephemeral secret generated by A, never sent to the server.
 
+In a managed account this call is admin-only, and the role it grants is settled
+here rather than after the fact — B is never briefly an admin and never briefly
+un-roled. `grants_role` defaults to `member` in a managed account and is ignored
+in a flat one, where every enrollment is an admin (0.3 behaviour). The mint pings
+A's other devices, so an invitation cannot be minted unobserved.
+
 [FB: parent taps "Add family member", hands the phone to the child or shows the
 QR across the room. The QR is the entire trust ceremony — physical co-presence
-is the authentication.]
+is the authentication. Family Beacon runs flat accounts, so `grants_role` plays
+no part there; see the Revocation section below.]
 
 Step 2 — B enrolls (management plane):
 
@@ -259,14 +323,35 @@ bundles for the asynchronous ones; only the *first* pairing needs the QR).
 
 Revocation (the exit path, sketched)
 
-    Any authorized device: POST /v1/devices/{dev_lost}/revoke
+    An admin, or the device itself: POST /v1/devices/{dev_lost}/revoke
     Server: identity key dead, its owned queues retired, push endpoint dropped.
     Peers: notified via device list change; drop the revoked device's queues,
     rotate their own, and re-key sessions client-side.
 
-[FB: "Emma's phone was stolen" — any parent device removes it; the family's
-subsequent traffic is unreadable to the stolen phone. Which devices may revoke
-(any vs. admin-role) is an app-level policy in FB, a capability flag in Sund.]
+Who may issue it is settled in PRD 0.4 rather than left to the consumer, because
+it is a server operation and only the server can refuse one:
+
+- Flat account: any device may revoke any other. This is 0.3 behaviour and the
+  default.
+- Managed account: only an admin may revoke another device.
+- Either mode: a device may always revoke *itself*, unconditionally, including
+  the account's last admin. The one refusal is that the last admin cannot be
+  revoked by a *different* device (409) — promote a second admin first.
+
+Because revocation drops the target's undelivered messages along with its queues,
+a client SHOULD treat it as a destructive action in its UI (confirm, name the
+target device, say what is lost). There is no undo and Sund will not offer one:
+an "unrevoke" would have to resurrect an identity key the peers have already been
+told to stop trusting.
+
+[FB: "Emma's phone was stolen" — a family device removes it; the family's
+subsequent traffic is unreadable to the stolen phone, and Emma's own phone can
+remove itself, which is what a wipe-on-loss flow uses. Family Beacon runs **flat**
+accounts deliberately: `FamilyBeacon-Roster.md` (Removal) is normative that any
+active device may remove any other and that no role confers authority, because
+concentrating removal in an admin hands an abusive member the lock. Sund offers
+managed mode; family-beacon declines it. See PRD → Threat model →
+Administration — this is a live cross-repo disagreement, not a settled mapping.]
 
 ---
 
@@ -307,6 +392,14 @@ network, no disk beyond in-memory SQLite. Covers the invariants testable in isol
 - quota attribution to the owner account; enforcement at the cap
 - message TTL expiry and deletion-unread
 - revocation kills the identity key and owned queues in one step
+- administration: the admin-only acts refused for a member in a managed account
+  and allowed in a flat one; self-revocation allowed for every role including the
+  last admin; the last-admin invariant refusing demotion and revocation-by-another
+  while permitting self-revocation, and holding under concurrent revocations (the
+  check and the write are one transaction); `/role` refused in a flat account;
+  promote refused against a revoked device and in a flat account; an invitation
+  granting the role it says it grants; no path that changes an account's
+  administration mode after provisioning
 
 System suite (target: < 30 s)
 
@@ -344,6 +437,23 @@ S4 Wake-up — a stub UnifiedPush distributor (an in-test HTTP handler) receives
 S5 Stolen phone — revoke a device: its signed requests fail, its owned queues
    are gone, peers see the device-list change (ping + refetch), rotate their
    queues and re-key; the revoked client's cached credentials open nothing.
+S5b Managed account, authorization — a member device M1 tries to revoke a peer,
+   mint an invitation and promote itself: all three refused, no device-list
+   change, no ping. M1 can still revoke an outstanding invitation (fail-safe by
+   design) and can revoke *itself*. An admin then revokes the second member M2:
+   succeeds, and M2 is pinged before its push endpoint is cleared.
+S5b2 Managed account, the last admin — the sole admin tries to demote itself and
+   to be revoked by a member: both refused (409). It then revokes *itself*:
+   succeeds, stranding the remaining members. `sund admin device promote`
+   recovers the account and pings every device. Concurrency: two admins revoking
+   each other at once leave exactly one non-revoked admin, never zero.
+S5b3 Flat account, no roles to change — `/role` is refused (409) whoever calls
+   it, and there is no request that changes the account's administration mode.
+S5c No silent administration — a member device, woken only by the ordinary ping,
+   refetches and sees the role change an admin made. Assert: every device in the
+   account except the actor was pinged (not just the admins), role is present in
+   the list every device reads, an invitation mint pings too, and the stored rows
+   name no actor for any of the acts — there is no "X revoked Y" record to find.
 S6 Invitation abuse — reuse a consumed token, use an expired one, use a revoked
    one: all fail closed; no device row is created.
 S7 Tenant isolation — two accounts on one server: cross-account queue reads,
@@ -406,3 +516,15 @@ Open items surfaced by this guide — resolved in PRD 0.3
    consumption, default 15-minute TTL, revocable before use (decision #7).
 3. Device-list change propagation: push a contentless ping AND require clients
    to refetch the device list before any new session (decision #8).
+
+Resolved in PRD 0.4
+
+4. "Which devices may revoke (any vs. admin-role)" — left here as an app-level
+   policy for Family Beacon and a hypothetical capability flag in Sund. Settled
+   the other way: it cannot be an app-level policy, because revocation is a
+   server operation and a client-side rule restricting it binds only the device
+   it restricts. It is now an optional per-account administration mode with an
+   `admin`/`member` role (decision #12). What the mode does *not* settle is
+   whether a family-shaped consumer should use it; family-beacon's roster spec
+   argues it should not, and PRD 0.4 records that disagreement rather than
+   closing it.

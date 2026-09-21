@@ -83,5 +83,8 @@ intent.
 - `docs/Sund-PriorArt.md` — survey (July 2026): SimpleX SMP is the closest
   incumbent; the gap Sund fills (blind transport + account/device model) is
   unoccupied. Its five design implications are incorporated in PRD 0.2.
+- `docs/deviations.md` — where the code, the guide or an issue departs from the PRD
+  or guide, one entry each, with status. Open entries are the agenda for the next
+  spec revision (`~/projects/CLAUDE.md`, *Design flow*).
 - Doc filenames are unversioned; the version lives in each doc's `Status:` line.
   Superseded PRD revisions (0.1, 0.2) live in git history, not as separate files.

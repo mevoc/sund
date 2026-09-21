@@ -3,9 +3,10 @@ Sund — Implementation Guide
 Status: v0.4 (Draft) — companion to Sund-PRD.md
 
 > New in 0.4: the per-device storage quota of PRD 0.5 (decision 13) — the
-> operator surface, the enforcement rule and the test coverage. It adds no
-> endpoint, which is the point: ceilings are an operator knob like the account
-> ceiling, so nothing in the API sketch changes.
+> operator surface, the enforcement rule and the test coverage. Writing a ceiling
+> stays out of the API; reading one does not, so the sketch gains
+> `GET /v1/me/quota` and `quota_bytes` in the device list, and a ceiling change
+> pings the account like any other administrative act.
 
 > New in 0.3: the account administration model of PRD 0.4 — administration modes,
 > the `admin`/`member` role, the role-granting invitation and the last-admin
@@ -54,8 +55,11 @@ Operator surface (the Holm bar):
                                                    lost its only admin; pings
                                                    every device, like any other
                                                    role change
-    sund admin device quota <device-id> <bytes>  → per-device storage ceiling
-                                                   (PRD 0.5); 0 removes it
+    sund admin account quota <account-id> <bytes>→ change the account ceiling
+    sund admin device quota <device-id> [<bytes>]→ per-device storage ceiling
+                                                   (PRD 0.5); 0 removes it,
+                                                   omitted shows it; a change
+                                                   pings the account
     cp sund.db backup/                            → backup
     mv sund-new sund && systemctl restart sund    → upgrade
 
@@ -102,7 +106,7 @@ System suite side (beaconsim, Python)
                     queue design; a closer fit than the general-purpose
                     `cryptography` package.
     httpx           HTTP calls against the API.
-    pytest          runner; each Testing → Scenario (S1-S9) is a test function.
+    pytest          runner; each Testing → Scenario (S1-S10) is a test function.
                     A fixture builds the sund binary once per run (`go build`),
                     then starts/stops it per test against a temp SQLite file on
                     a random loopback port — same "per test, because startup is
@@ -131,7 +135,8 @@ Management plane — requests signed with the device's Ed25519 identity key
 (headers: device id, timestamp, nonce, signature over method+path+body):
 
     POST /v1/devices/register        enroll with one-time token (unsigned + token)
-    GET  /v1/devices                 list account devices (incl. role)
+    GET  /v1/devices                 list account devices (incl. role, quota)
+    GET  /v1/me/quota                own ceiling + stored bytes (PRD 0.5)
     POST /v1/devices/{id}/revoke     revoke a device        [admin; always self]
     POST /v1/devices/{id}/role       set a device's role    [admin; managed only]
     PUT  /v1/me/bundle               publish opaque key bundle (size-capped)
@@ -397,11 +402,20 @@ network, no disk beyond in-memory SQLite. Covers the invariants testable in isol
 - queue ID generation: recipient_id and sender_id unrelated, unpredictable
 - sender-key binding on first SEND; rejection of a second binding attempt
 - quota attribution to the owner account; enforcement at the cap
-- per-device quota: enforced alongside the account cap, refusing when *either*
-  would be exceeded; 0 at either level means no ceiling there; device ceilings
-  that over-commit the account ceiling behave (the account cap still binds);
-  a device's usage counts only the queues it owns, so one device filling up
-  leaves a peer with its own ceiling still able to receive
+- per-device quota: a send that lands exactly on a ceiling succeeds and one byte
+  more fails, at each level independently; 0 at either level means no ceiling
+  there; stored bytes count ciphertext payload only (no envelope, no base64) and
+  exclude expired-but-unpurged rows; when device ceilings over-commit the account
+  ceiling the account ceiling still binds and refuses first; lowering a ceiling
+  below current usage refuses further sends and deletes nothing; a device's usage
+  counts only the queues it owns, so one device filling up leaves a peer with its
+  own ceiling still able to receive
+- the 507 body is byte-identical whichever ceiling tripped, so a sender cannot
+  tell a device-level refusal from an account-level one (today's text, "account
+  storage quota exceeded", is wrong for the device level and must change)
+- a ceiling change pings every device in the account, `quota_bytes` appears in
+  the device list, and `GET /v1/me/quota` returns the caller's own ceiling and
+  stored bytes — a device can always tell being capped from being full
 - message TTL expiry and deletion-unread
 - revocation kills the identity key and owned queues in one step
 - administration: the admin-only acts refused for a member in a managed account
@@ -468,21 +482,29 @@ S5c No silent administration — a member device, woken only by the ordinary pin
    name no actor for any of the acts — there is no "X revoked Y" record to find.
 S6 Invitation abuse — reuse a consumed token, use an expired one, use a revoked
    one: all fail closed; no device row is created.
-S10 Quota bulkhead — two devices in one account, each with its own ceiling well
-   under the account's. Fill the first device's queues until sends to it are
-   refused with 507; assert the second device still receives, that the account
-   ceiling was never reached, and that draining the first frees only its own
-   headroom. Then clear the first device's ceiling (0) and assert it can again
-   consume up to the account cap — the 0.4 behaviour, unchanged underneath.
 S7 Tenant isolation — two accounts on one server: cross-account queue reads,
    sends, bundle fetches and device-list reads all fail.
-S8 Blindness audit — the structural test. After S1–S7, open sund.db directly
+S8 Blindness audit — the structural test. After every other scenario including
+   S10, whose traffic is the bulkiest, open sund.db directly
    and assert: no table or column links a sender device to a queue; every
    stored payload is ciphertext; and the known plaintexts beaconsim sent
    (coordinates, "SOS") appear nowhere in the DB file or the server logs. The
    Architecture Principle as an executable regression test.
 S9 Operator surface — with undelivered messages in queues: cp the DB (backup),
    kill the binary, restart against the copy, drain — everything survives.
+S10 Quota bulkhead — two devices in one account, each given its own ceiling well
+   under the account's. Because ceilings are operator-written, the scenario shells
+   out to `sund admin device quota` against the same database the running binary
+   holds open (SQLite WAL, one writer at a time — the CLI must open it the same
+   way the server does, and the scenario is the place that proves the operator
+   surface works on a live deployment rather than only at rest). Fill the first
+   device's queues until sends to it are refused; assert the second device still
+   receives, the account ceiling was never reached, and draining the first frees
+   only its own headroom. Assert the refusal body does not say which ceiling
+   tripped, that the ceiling change pinged both devices, and that
+   `GET /v1/me/quota` on the capped device reports the ceiling it was given.
+   Then clear that ceiling (0) and assert the device can again consume up to the
+   account cap — 0.4 behaviour, unchanged underneath.
    "Install. Deploy. Backup. Upgrade." is tested, not hoped.
 
 CI runs both suites on every commit; the unit suite additionally runs as a
@@ -492,7 +514,8 @@ Consumer contract tests (planned)
 
 Both suites above test Sund against itself and against beaconsim — an
 implementation this repo also owns. Neither can catch the failure that actually
-matters to a consumer: a change here that is internally consistent, passes S1–S9,
+matters to a consumer: a change here that is internally consistent, passes
+S1–S10,
 and still breaks the real client library on the other side.
 
 The remedy is to run the consumer's own contract suite in this repo's CI: a job

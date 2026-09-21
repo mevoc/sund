@@ -1,7 +1,8 @@
 Sund — Implementation Status
 
-Status: v0.1 (snapshot, 2026-07-20; "Not built yet" refreshed against PRD 0.4 on
-2026-09-21) — describes the code, not the plan
+Status: v0.1 (snapshot of the code at the storage-quota commit, 2026-07-20;
+"Not built yet" and the schema block refreshed against PRD 0.5 on 2026-09-21)
+— describes the code, not the plan
 
 This is a snapshot of what the Sund binary actually does as of the storage-quota
 commit, written for the people who build on it — chiefly family-beacon
@@ -56,7 +57,9 @@ Data model (actual SQLite schema)
     accounts     id, created, quota (class label), status, quota_bytes
     devices      id, account_id, public_key, push_endpoint, capabilities,
                  created, last_seen, revoked
-    invitations  token_hash, account_id, created, expires, consumed
+    bundles      device_id (pk), blob (opaque, size-capped), updated
+    invitations  token_hash (pk), id, account_id, created, expires, consumed,
+                 revoked
     queues       recipient_id (pk), sender_id, owner_device, recipient_key,
                  sender_key (null until bound), created, retired
     messages     seq (autoincrement), id, queue_id (= a queue's recipient_id),
@@ -271,7 +274,12 @@ Run both with `make test-all`.
 Not built yet (relative to the PRD / API sketch)
 
 - Per-device storage quota (PRD 0.5, decision 13): `devices.quota_bytes`,
-  `sund admin device quota`, and the second ceiling in the append path. The
+  `sund admin device quota`, `GET /v1/me/quota`, `quota_bytes` in the device-list
+  response, a ping on every ceiling change, and the second ceiling in the append
+  path. The 507 body must also stop naming the account level (it currently reads
+  "account storage quota exceeded"), since a sender must not learn which ceiling
+  tripped. The concurrency caveat below applies per-device exactly as it does
+  per-account. The
   enforcement query in `internal/store/queue.go` already joins
   queues → devices → accounts and sums per account; the device level is the same
   query filtered on `q.owner_device` instead of `d.account_id`, so this is a

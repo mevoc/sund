@@ -85,7 +85,7 @@ intent.
   sketch (two planes), walkthroughs for first-device onboarding and second-device
   invitation (SimpleX-style QR bootstrap), each step mapped to Family Beacon.
   Also the test strategy: unit + system suites (both per-commit), the beaconsim
-  client mockup, scenarios S1–S10 (S5b/S5b2/S5b3 administration, S10 quota).
+  client mockup, scenarios S1–S10 (S5b/S5b2/S5b3/S5c administration, S10 quota).
   Its four surfaced open items are resolved in PRD 0.3 and 0.4.
 - `docs/Sund-Status.md` — **implementation snapshot** (what the binary actually
   does, for consumers — chiefly family-beacon — and contributors): as-built data

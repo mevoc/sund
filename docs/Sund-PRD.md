@@ -8,11 +8,16 @@ Status: PRD v0.5 (Draft) — supersedes PRD 0.4
 > skerries; also "sound, healthy"). The kernel extracted from Skerry
 > (`../skerry`). This revision adds one thing: an optional **per-device** storage
 > ceiling beside the per-account one (decision 13), so that one device's backlog
-> cannot consume headroom the whole account shares. It is cheap on every axis
-> that matters here — no new linkage, because the quota check already resolves
-> queue → owner device; no new endpoint, because ceilings are an operator knob
-> like the account ceiling already is; and no change for anyone who does not set
-> one. It is deliberately not a sender-side limit, which the design cannot offer.
+> cannot consume headroom the whole account shares. It costs no new linkage: the
+> quota check already resolves queue → owner device. Setting a ceiling stays an
+> operator act with no endpoint, because it is a denial-of-service primitive;
+> *reading* one is not, so a device can see its own ceiling and headroom, and a
+> ceiling change pings the account like any other administrative act — the host
+> must not hold a silent power over a device, which is the rule 0.4 already set
+> for the operator's other command. Nothing changes for a deployment that sets no
+> ceiling. It is deliberately not a sender-side limit, which the design cannot
+> offer, and it makes one disclosure worse rather than better: see the threat
+> model on the refusal as an oracle.
 > A second, smaller change: the Data model table is brought back into line with
 > the schema, closing a deviation recorded on 2026-09-18.
 >
@@ -101,12 +106,13 @@ Accounts
 - Quotas are attributed to the queue owner's account (the recipient side — the
   side the server knows). Senders stay pseudonymous without breaking accounting.
 - Storage quota has two levels, both recipient-side and both optional: a ceiling
-  on the account, and a ceiling on an individual device's stored payloads. A send
-  is refused if *either* would be exceeded. Device ceilings need not sum to the
-  account ceiling — over-committing is normal and correct, exactly as it is for
-  disk quotas — and a device with no ceiling of its own is bounded only by the
-  account's, which is PRD 0.4 behaviour. See Devices → Storage quota for what the
-  second level does and does not bound.
+  on the account's stored bytes, and one on an individual device's. A send is
+  refused if it would take *either* past its ceiling. Device ceilings need not
+  sum to the account ceiling — over-committing is normal and correct, exactly as
+  it is for disk quotas — and a device with no ceiling of its own is bounded only
+  by the account's, which is PRD 0.4 behaviour. "Stored bytes", the boundary rule
+  and what a ceiling does when lowered are defined in Devices → Storage quota,
+  which is also where the second level's costs are stated.
 - Administration mode: an account is `flat` (default) or `managed`, chosen at
   provisioning and not changeable afterwards — there is no endpoint for it, and
   that refusal is the whole specification. It decides which role a device gets
@@ -135,7 +141,8 @@ Devices
   destroys nothing), so the fastest possible response to a mis-shared QR is worth
   more than the ability of a hostile member to be obstructive.
 - Explicit device list: every device in an account can see all registered devices
-  (id, role, created, last_seen, capabilities). Revocation is a first-class
+  (id, role, quota_bytes, created, last_seen, capabilities). Revocation is a
+  first-class
   operation; a revoked device's identity key and queue access die immediately,
   and its undelivered messages are dropped along with its queues. Revocation is
   destructive and has no undo — part of why an account may want it gated.
@@ -145,7 +152,9 @@ Devices
   the admins. This includes an operator-side `sund admin device promote`, which
   pings *every* device since no device performed it: the host is the one party
   the role model cannot bind, so it must not also hold the only silent role
-  change. A revocation pings its target too — it is a device the act was
+  change, and the same goes for `sund admin device quota`: changing a device's
+  ceiling is an administrative act and pings the account like any other. A
+  revocation pings its target too — it is a device the act was
   performed on, and the one with most reason to be told — so the ping is
   attempted *before* the target's push endpoint is cleared, in the same step; an
   unreachable target learns instead from its next request, which fails closed, and
@@ -237,13 +246,34 @@ Devices
   and stays unrecorded (Threat model → Trust boundary). It is also optional, and
   there is a serious argument that a family-shaped consumer should decline it —
   see Threat model → Administration.
-- Storage quota: a device may carry its own ceiling on the total size of the
-  undelivered payloads sitting in the queues it owns. This costs no new linkage.
-  Quota is already attributed by resolving queue → owner device → account, so
-  counting to the device instead of to the account uses the join the server
-  already performs; it learns nothing it was not already computing, and queue
-  ownership is already disclosed as the one sanctioned transport→management link
-  (Threat model).
+- Storage quota: a device may carry its own ceiling beside the account's. This
+  costs no new linkage. Quota is already attributed by resolving queue → owner
+  device → account, so counting to the device instead of to the account uses a
+  join the server already performs — one join fewer, in fact; it learns nothing
+  it was not already computing, and queue ownership is already disclosed as the
+  one sanctioned transport→management link (Threat model).
+
+  **Stored bytes**, defined once and used everywhere below: the summed length of
+  the ciphertext payloads a device's queues are holding — messages accepted, not
+  yet acked, and not yet expired. Expired-but-unpurged rows do not count (they
+  are unreachable and are dropped on the next drain; see the lazy-purge entry in
+  `docs/deviations.md`), and nothing outside the payload counts — no envelope,
+  no transport framing, no base64 expansion.
+
+  Enforcement, stated tightly enough to become acceptance criteria:
+
+    - A send is refused when it would take the owning device's stored bytes past
+      its ceiling, or the owning account's past the account ceiling. Whichever
+      trips, the refusal is the same.
+    - The boundary is inclusive: a send landing *exactly* on a ceiling succeeds.
+      Only exceeding it fails. (This matches the account check as built.)
+    - `0` at either level means no ceiling there, which is why both levels are
+      additive: an account or device that has never been given one behaves
+      exactly as it did before the column existed.
+    - Ceilings are not retroactive. Lowering one below a device's current stored
+      bytes drops nothing and deletes nothing; it refuses further sends until
+      acks or expiry bring the device back under. Sund never discards a stored
+      payload to satisfy a ceiling that moved.
 
   What the second level buys is containment, and it lands on a case the threat
   model otherwise leaves open. With a single account-wide ceiling, a device whose
@@ -262,14 +292,36 @@ Devices
   victim into everyone else's headroom. Bounding the sender would require the
   sender↔queue link the whole design refuses (see Queues).
 
-  Ceilings are set by the operator (`sund admin device quota`), not over the API,
-  and there is deliberately no endpoint for them. A per-device ceiling is a
-  denial-of-service primitive in the wrong hands — setting a peer's ceiling to
-  one byte silences it — so keeping it out of band means it adds no authorization
-  question, no interaction with the administration model of decision 12, and
-  nothing a hostile member can reach. There is also no derived default: dividing
-  the account ceiling by the device count would silently re-cap every existing
-  device whenever a new one enrolled.
+  Setting is the operator's (`sund admin device quota`); there is deliberately no
+  endpoint that *sets* a ceiling. A per-device ceiling is a denial-of-service
+  primitive — setting a peer's to one byte silences it — so keeping the write out
+  of band means it raises no authorization question, does not interact with
+  decision 12, and puts it beyond any member's reach. There is also no derived
+  default: dividing the account ceiling by the device count would silently re-cap
+  every existing device whenever a new one enrolled.
+
+  Keeping the write out of band does not put the primitive beyond the *host's*
+  reach, and the rest of this section exists because it must not be silent there
+  either. The same argument the propagation rule makes about
+  `sund admin device promote` applies unchanged: the host is the one party none
+  of this binds, so it must not also hold the only invisible act. Therefore:
+
+    - A ceiling change is an administrative act. It pings every device in the
+      account, exactly as an operator promote does.
+    - `quota_bytes` is a field of the device list every device already reads, so
+      a device can see its own ceiling and its peers'.
+    - `GET /v1/me/quota` returns the calling device's own ceiling and its current
+      stored bytes. This is the one *read* the no-endpoint rule does not cover,
+      and it is what lets a device tell "I am full" from "someone capped me" —
+      without it, a one-byte ceiling would be indistinguishable client-side from
+      honest fullness, which is precisely the silent power the PRD refuses
+      elsewhere. It discloses to a device only what the device's own queues
+      already imply, and Postiljon has an open request for exactly this reading
+      (its `docs/deviations.md`, "Quota headroom cannot be reported").
+
+  A consumer SHOULD surface a ceiling change and a persistent refusal to the
+  user rather than retrying quietly; as with the administration model, Sund can
+  publish the fact and cannot make a client show it.
 - Key bundles: each device may publish a small, size-capped, opaque blob of
   client-side key material (e.g. prekeys for X3DH-style async session setup),
   retrievable by other devices in the account. The server never interprets it —
@@ -371,10 +423,14 @@ A `quota_bytes` of 0 means "no ceiling at this level", so an account or device
 that has never been given one behaves exactly as it did before the column
 existed — which is what makes both quota levels additive rather than a migration.
 
-This table is meant to be checkable against the schema, and in 0.5 it is again:
-the accounts, invitations and messages rows above were out of step with
-`internal/store/store.go` (recorded in `docs/deviations.md`, 2026-09-18) and are
-corrected here. `seq` gives a stable per-queue delivery order at second-precision
+This table is design intent, and the promise attached to it runs one way: every
+column the implementation actually has appears here. Not the converse — five
+columns listed above are specified and unbuilt (`accounts.admin_mode`,
+`devices.role`, `invitations.grants_role` from 0.4 and `devices.quota_bytes` from
+0.5), and `Sund-Status.md` → "Not built yet" tracks that gap. The one-way promise
+had lapsed and is repaired here: the accounts, invitations and messages rows were
+out of step with `internal/store/store.go` (recorded in `docs/deviations.md`,
+2026-09-18). `seq` gives a stable per-queue delivery order at second-precision
 timestamps, `expires` is the absolute form of the per-message TTL that the purge
 query needs, and `invitations.id`/`revoked` are what decision 7's listable and
 revocable invitations actually require. One item from that entry is deliberately
@@ -519,9 +575,6 @@ Defended against:
   token grants: a stolen admin-granting invitation enrolls a device that can then
   revoke and enroll, which is a reason to mint those sparingly and to prefer a
   short TTL still.
-- Storage exhaustion spreading past its target: with per-device ceilings set, a
-  device whose queues are flooded stops receiving without consuming the ceiling
-  its peers depend on. The flood itself is not prevented (see Trust boundary).
 - Member device turned hostile, in a managed account: it cannot revoke another
   device, enroll one of its own, or change a role. In a flat account it can do
   all three — that is the mode's stated cost, not a defect. The converse case, an
@@ -557,14 +610,28 @@ Explicitly NOT hidden — residual metadata a host can observe:
   account; and `grants_role` tells it, at mint time, that an account is about to
   add an admin rather than a member. A flat account exposes only the first, and
   exposes it uniformly.
-- What a refused send discloses. A 507 tells the sender that storage is full on
-  the recipient side. With an account ceiling alone that is a statement about the
-  whole account — information about devices the sender may not know exist. A
-  device ceiling that trips first narrows it to the queue the sender already
-  holds an ID for, which is less disclosure rather than more; but the failure is
-  still observable, and a sender can distinguish "this queue is full" from "this
-  queue is gone" (404, a retired queue). Neither reveals who else is in the
-  account.
+- What a refused send discloses — the one item in this list observable by a
+  *sender* rather than by the host, and the thing decision 13 makes worse rather
+  than better. Mechanically: the refusal says storage is full on the recipient
+  side at one of the two levels and does not say which, which it MUST NOT, since
+  a sender able to tell "account full" from "device full" would learn about
+  account-wide state it otherwise cannot see. It does not mean "this queue is
+  full": a device ceiling covers that device's stored bytes across every queue it
+  owns, including queues the sender holds no ID for and cannot enumerate. And
+  because the device ceiling is meant to be the lower of the two, refusals fire
+  more often than under an account ceiling alone.
+
+  That makes the refusal a coarse oracle, new in 0.5 and the honest price of the
+  feature. A sender holding a valid sender ID can send minimum-size payloads to
+  binary-search the remaining headroom, and poll to watch headroom return —
+  learning roughly when the recipient drained (so, when it was last online) or
+  when its messages expired. Sizes and timing are already listed above as visible
+  to the host; this exposes a coarse version of them to a sender too. Against the
+  64 MiB account ceiling the search was expensive and noisy; against a small
+  device ceiling it is cheap. It reveals no payload content, no other queue, and
+  nothing about who else is in the account — and the prober need not be an
+  account member at all, since a send authenticates with the per-queue sender key
+  alone (`docs/deviations.md`, 2026-09-20, open).
 - On iOS, wake timing (though nothing else) is additionally visible to the vendor
   push gateway and to Apple — see Push architecture.
 
@@ -702,6 +769,9 @@ Relationship to other projects
   its backend (July 2026), closing its open decisions #1 (E2EE) and #3 (Skerry
   coupling); #2 (push) is shared. Its ARCHITECTURE.md is rewritten around Sund.
 - skerry — grows around Sund; references it as Layer 1.
+- postiljon — a headless Sund subscriber, and the consumer `client/` exists for.
+  It asked for both halves of decision 13: per-device quota, and a way to read
+  headroom so a digest can report it.
 - `Sund-ImplementationGuide.md` — companion: components, API sketch and
   end-to-end walkthroughs (first-device onboarding, second-device invitation),
   each step mapped to Family Beacon. This PRD is normative where they disagree.
@@ -780,24 +850,32 @@ new in 0.5:
     two roles, one flag, no permission system, no actor recorded for any
     administrative act; the account stays the trust boundary and no may-talk-to
     graph is introduced.
-13. Per-device storage quota. A device may carry its own ceiling on the stored
-    payloads in the queues it owns, enforced alongside the account ceiling; a
-    send is refused if either would be exceeded, and 0 at either level means no
-    ceiling there, so both are additive. Cheap by construction: the quota check
+13. Per-device storage quota. A device may carry its own ceiling on its stored
+    bytes, enforced alongside the account ceiling; a send is refused if it would
+    take either past its ceiling, the boundary is inclusive, and 0 at either
+    level means no ceiling there, so both are additive and a deployment that sets
+    none is unaffected. Ceilings are not retroactive: lowering one refuses
+    further sends and discards nothing. Cheap by construction — the quota check
     already resolves queue → owner device → account, so counting to the device
-    reuses a join the server performs anyway and discloses nothing new — the one
-    new column, `devices.quota_bytes`, is a per-device attribute, not an edge,
-    the same test decision 12's `role` had to pass. What it is for: with only an
-    account ceiling, one device's flooded queues exhaust the headroom every other
-    device shares, so a single member can silence the family by being filled up.
-    Per-device ceilings make that a bulkhead. What it is **not**: a sender-side
-    limit. There is no sender_device, so the server cannot charge or throttle a
-    sender; the ceiling bounds absorption, never emission, and the flood itself
-    remains undefended (Threat model → Trust boundary). Set by the operator
-    (`sund admin device quota`), with no API endpoint and no derived default,
-    because a per-device ceiling is a denial-of-service primitive in a peer's
-    hands and because keeping it out of band means it raises no authorization
-    question and does not interact with decision 12 at all.
+    reuses a join the server performs anyway (one join fewer) and discloses
+    nothing new to the host; `devices.quota_bytes` is a per-device attribute, not
+    an edge, the same test decision 12's `role` had to pass. What it is for: with
+    only an account ceiling, one device's flooded queues exhaust the headroom
+    every other device shares, so a single member can silence the family by being
+    filled up. Per-device ceilings make that a bulkhead. What it is **not**: a
+    sender-side limit — there is no sender_device, so the ceiling bounds
+    absorption, never emission, and the flood itself remains undefended (Threat
+    model → Trust boundary). Writing a ceiling is the operator's alone
+    (`sund admin device quota`, no endpoint, no derived default), because it is a
+    denial-of-service primitive and keeping the write out of band puts it beyond
+    every member's reach. But it is not beyond the host's, so by the rule 0.4
+    already applied to `sund admin device promote` it must not be silent either:
+    a ceiling change pings the account, `quota_bytes` joins the device list, and
+    `GET /v1/me/quota` lets a device read its own ceiling and stored bytes —
+    which is also the headroom read Postiljon has an open request for. Cost
+    accepted and recorded: a lower ceiling makes the refusal a cheap oracle for a
+    sender probing a recipient's headroom and drain timing (Threat model,
+    residual metadata).
 
 Open decisions remaining
 

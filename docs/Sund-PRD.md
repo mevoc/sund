@@ -11,10 +11,11 @@ Status: PRD v0.4 (Draft) — supersedes PRD 0.3
 > device, minting an invitation and changing a role to devices holding an admin
 > role, instead of granting all three to every device equally. The flat account
 > of PRD 0.3 remains the default and is unchanged in behaviour, and the mode is
-> opt-in per account: Family Beacon has declined it on anti-stalkerware grounds,
-> a disagreement recorded under Threat model → Administration rather than settled
-> here. The change is listed at the end under "Decisions in this revision"; the
-> eleven decisions of PRD 0.2 and 0.3 carry over unchanged.
+> opt-in per account, and family-beacon's roster spec as written is incompatible
+> with it on anti-stalkerware grounds — a conflict recorded under Threat model →
+> Administration rather than settled here. The change is listed at the end under
+> "Decisions in this revision"; the eleven decisions of PRD 0.2 and 0.3 carry
+> over unchanged.
 
 ---
 
@@ -96,8 +97,10 @@ Accounts
 - Administration mode: an account is `flat` (default) or `managed`, chosen at
   provisioning and not changeable afterwards — there is no endpoint for it, and
   that refusal is the whole specification. It decides which role a device gets
-  when it registers, and nothing else — see Devices → Roles and administration.
-  `flat` is PRD 0.3 behaviour exactly. Named *administration* mode to stay clear
+  when it registers, and whether roles may be changed at all — see Devices →
+  Roles and administration. A `flat` account behaves as PRD 0.3 did, with one
+  addition that applies in both modes: minting an invitation now pings the
+  account. Named *administration* mode to stay clear
   of the two **transport**-trust modes of decision 11, which are an unrelated
   axis.
 
@@ -129,16 +132,24 @@ Devices
   the admins. This includes an operator-side `sund admin device promote`, which
   pings *every* device since no device performed it: the host is the one party
   the role model cannot bind, so it must not also hold the only silent role
-  change. On waking, a client refetches the device list (and, after a mint,
-  the invitation list). Pings are best-effort — clients MUST additionally refetch
-  the device list before establishing any new session or pairing, so a missed ping
-  costs latency, never security.
+  change. A revocation pings its target too — it is a device the act was
+  performed on, and the one with most reason to be told — so the ping is
+  attempted *before* the target's push endpoint is cleared, in the same step; an
+  unreachable target learns instead from its next request, which fails closed, and
+  a consumer that promises a removed device will be told cannot rely on the ping
+  alone. Because a ping carries nothing, a woken client cannot know *which* act
+  fired it: the rule is to refetch the device list and the invitation list on any
+  ping, not to refetch selectively. Pings are best-effort — clients MUST
+  additionally refetch the device list before establishing any new session or
+  pairing, so a missed ping costs latency, never security.
 - Roles and administration: each device holds a role, `admin` or `member`. The
   account's administration mode decides which role a *newly registered* device
   gets — in a `flat` account every device registers as an admin; in a `managed`
   account a device registers with the role its invitation granted, defaulting to
   `member`. The first device of an account is always an admin. Authorization is
-  then one rule, evaluated identically in both modes:
+  then one rule. Two of its three clauses are evaluated identically in both modes
+  — flat is simply the case where every device is an admin, not a second code
+  path — and the third is the one place the mode itself is consulted:
 
     - Admin only: revoking another device, minting an invitation.
     - Any device, always: listing devices and invitations, revoking an
@@ -158,12 +169,19 @@ Devices
   One invariant the server enforces: **an account never loses its last admin to
   an act performed on another device.** The last non-revoked admin cannot be
   demoted, and cannot be revoked by a different device; promoting a second admin
-  first is the only way through. This deliberately does not extend to
+  first is the only way through. The check and the write are one transaction, so
+  two admins revoking each other concurrently cannot both pass — one of them
+  becomes the last admin and its revocation is refused. That is a requirement,
+  not an implementation note: evaluated outside a transaction the invariant is
+  merely usually true, which is the same as false. It deliberately does not
+  extend to
   self-revocation, so one bad state stays reachable: the sole admin of a managed
   account can leave, stranding members who can then neither invite nor revoke.
   Sund makes that recoverable from outside rather than preventing it —
   `sund admin device promote <device-id>` is the operator's way back in — and a
-  consumer SHOULD keep a second admin in any managed account. A single-device
+  consumer SHOULD keep a second admin in any managed account. Promote is refused
+  against a revoked device, and in a flat account, where every non-revoked device
+  is already an admin and there is nothing to promote. A single-device
   account self-revoking is the degenerate case: an empty account, nobody
   stranded.
 
@@ -280,7 +298,9 @@ Push wake-up
 - A ping carries nothing — no payload, no queue ID. It only tells a device
   "check in"; the client then drains its queues over the API.
 - Pings are sent on message arrival (transport plane, via queue ownership) and on
-  device-list changes (management plane, see Devices).
+  every administrative act — registration, revocation, role change and invitation
+  minting (management plane, see Devices). A mint changes no device list, which is
+  why the trigger is the act and not the list.
 - Delivery paths differ fundamentally per platform — see Push architecture.
 
 Health and metrics endpoints.
@@ -479,8 +499,10 @@ to which: the device list is visible to all members, and reachability between th
 is governed entirely by the consumer's pairing protocol (see Devices → Key
 bundles, Reachability). What 0.4 changes is narrower than it sounds — the account
 is still the trust boundary, and every non-revoked device in it is still trusted
-to read the device list and to use the transport plane. Only the three
-administrative acts are gated. Consequences a consumer must weigh:
+to read the device list and to use the transport plane. Only three acts are
+gated — revoking another device, minting an invitation, changing a role — of the
+four the propagation rule calls administrative; the fourth, registration, is
+gated by holding a valid token instead. Consequences a consumer must weigh:
 
 - A compromised or malicious member device can enumerate the account's device
   list and, if the consumer publishes reachable bundles, initiate to any peer
@@ -539,16 +561,18 @@ Open decision 2.
 Nor does it defend against a hostile *admin*, and that is the serious argument
 against the mode rather than a footnote to it. A member's only remedy against an
 admin is to revoke itself and leave, which is exactly why self-revocation carries
-no exception. Family Beacon, Sund's first consumer, has decided the question the
-other way for this reason, and its wording is worth quoting rather than
-paraphrasing: its roster spec is normative that "any active device may remove any
-other device — there is no privileged remover", because "concentrating removal in
-an 'admin' would hand exactly the wrong person a lock", and it judges the
+no exception. Family Beacon, Sund's first consumer, has a roster rule that
+predates this mode and is incompatible with it for exactly this reason. Its
+wording is worth quoting rather than paraphrasing: `FamilyBeacon-Roster.md`
+(Removal) is normative that "any active device may remove any other device —
+there is no privileged remover", because "concentrating removal in an 'admin'
+would hand exactly the wrong person a lock", and it judges the
 permissive rule's failure mode (eviction: loud, ledgered, recoverable by
 re-pairing) preferable to the restrictive rule's (a person trapped in a family
 they cannot alter). Sund does not overrule that and is not in a position to: it
 cannot see a family. `flat` is the default, `managed` is opt-in per account, and
-a consumer is free never to offer it — family-beacon does not. Whether any
+a consumer is free never to offer it — which is where family-beacon's rule as
+written leaves it. Whether any
 family-shaped consumer should use managed mode is a cross-repo question this
 revision raises and does not settle.
 
@@ -658,8 +682,8 @@ stack lock and the second transport-trust mode. Item 12 is new in 0.4:
     `sund://`, so that stripping a fragment fails closed instead of silently
     downgrading. Clients implement both; there is no fallback between them, and
     switching modes re-pairs every device.
-12. Optional per-account administration. An account is `flat` (default, and
-    unchanged: every device registers as an admin and may do everything) or
+12. Optional per-account administration. An account is `flat` (the default, and
+    0.3's behaviour: every device registers as an admin and may do everything) or
     `managed` (devices register as members; revoking another device and minting
     an invitation become admin-only, and roles become changeable at all). The
     reason this is a server concern and not, as PRD 0.3 had it, app-level policy:
@@ -669,11 +693,12 @@ stack lock and the second transport-trust mode. Item 12 is new in 0.4:
     stated rather than designed away: the three new columns are readable by the
     host (Threat model, residual metadata); the model binds members, not the host
     (Administration); and it does not bind a hostile admin either, which is why
-    self-revocation is unconditional and why family-beacon has declined the mode
-    on anti-stalkerware grounds — a disagreement this revision records instead of
-    resolving. One server-enforced invariant keeps an account administrable: it
-    never loses its last admin to an act performed on another device
-    (self-revocation excepted, with an operator recovery path). Scope discipline:
+    self-revocation is unconditional and why family-beacon's roster rule, written
+    before this mode existed, is incompatible with it on anti-stalkerware grounds
+    — a conflict this revision records instead of resolving. One server-enforced
+    invariant keeps an account administrable: it never loses its last admin to an
+    act performed on another device (self-revocation excepted, with an operator
+    recovery path). Scope discipline:
     two roles, one flag, no permission system, no actor recorded for any
     administrative act; the account stays the trust boundary and no may-talk-to
     graph is introduced.

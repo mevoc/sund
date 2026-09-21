@@ -65,9 +65,9 @@ intent.
   administrative act is invisible to a *conforming* client (Sund pings every
   other device and publishes role; whether a client surfaces either is the
   consumer's obligation and unverifiable server-side). **Opt-in and
-  contested:** family-beacon has declined the mode on anti-stalkerware grounds
-  (its roster spec: no privileged remover), and PRD 0.4 records that
-  disagreement rather than settling it — raise it, don't pick a winner. From
+  contested:** family-beacon's roster spec as written is incompatible with it on
+  anti-stalkerware grounds (no privileged remover), and PRD 0.4 records the
+  conflict rather than settling it — raise it, don't pick a winner. From
   0.3: push-ping fan-in in the threat model, invitation semantics (single-use,
   15-min TTL, revocable), device-list changes push + mandatory refetch, a
   per-commit test strategy (unit + system suites, blindness audit), and the

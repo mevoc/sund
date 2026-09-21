@@ -135,9 +135,10 @@ Management plane — requests signed with the device's Ed25519 identity key
     POST /v1/invitations/{id}/revoke revoke one before use
 
 The bracketed markers are the administration rule of PRD 0.4 (Devices → Roles and
-administration). The admin check is not a mode switch in the handler: every device
-in a `flat` account registers as an admin, so the same check yields 0.3's
-behaviour there. Three things sit beside it:
+administration). The admin check itself is not a mode switch in the handler:
+every device in a `flat` account registers as an admin, so the same check yields
+0.3's behaviour there. The mode is consulted in exactly one place — `/role`,
+below. Three things sit beside the check:
 
 - **Self-revocation is unconditional.** `POST /v1/devices/{id}/revoke` where the
   id is the caller's own always succeeds, for any role, including the account's
@@ -152,8 +153,13 @@ behaviour there. Three things sit beside it:
   demotion at a time. The mode itself has no endpoint at all.
 
 Every administrative act — register, revoke, role change *and* invitation mint —
-pings every device in the account except the one that performed it. Not only the
-admins, and never silently.
+pings every device in the account except the one that performed it: not only the
+admins, and never silently. Two consequences a client implementer needs. A
+revocation pings its *target* as well, which means the ping goes out before the
+target's push endpoint is cleared, in the same step — best-effort, so an
+unreachable device learns from its next request instead. And since a ping carries
+nothing, a woken client cannot tell which act fired it: refetch the device list
+*and* the invitation list on any ping.
 
 Transport plane — requests authenticated with per-queue keys only. No device
 identity appears in these calls; that is the point:
@@ -389,9 +395,11 @@ network, no disk beyond in-memory SQLite. Covers the invariants testable in isol
 - administration: the admin-only acts refused for a member in a managed account
   and allowed in a flat one; self-revocation allowed for every role including the
   last admin; the last-admin invariant refusing demotion and revocation-by-another
-  while permitting self-revocation; `/role` refused in a flat account; an
-  invitation granting the role it says it grants; no path that changes an
-  account's administration mode after provisioning
+  while permitting self-revocation, and holding under concurrent revocations (the
+  check and the write are one transaction); `/role` refused in a flat account;
+  promote refused against a revoked device and in a flat account; an invitation
+  granting the role it says it grants; no path that changes an account's
+  administration mode after provisioning
 
 System suite (target: < 30 s)
 
@@ -429,14 +437,18 @@ S4 Wake-up — a stub UnifiedPush distributor (an in-test HTTP handler) receives
 S5 Stolen phone — revoke a device: its signed requests fail, its owned queues
    are gone, peers see the device-list change (ping + refetch), rotate their
    queues and re-key; the revoked client's cached credentials open nothing.
-S5b Managed account — a member device M1 tries to revoke a peer, mint an
-   invitation and promote itself: all three refused, no device-list change, no
-   ping. M1 can still revoke an outstanding invitation (fail-safe by design) and
-   can revoke *itself*. An admin then revokes the second member M2: succeeds.
-   The account's sole admin tries to demote itself: refused. A second device is
-   tried against `/role` in a flat account: refused. Finally the sole admin
-   revokes *itself*: succeeds — the account is left administrable only via
-   `sund admin device promote`, which the scenario then exercises.
+S5b Managed account, authorization — a member device M1 tries to revoke a peer,
+   mint an invitation and promote itself: all three refused, no device-list
+   change, no ping. M1 can still revoke an outstanding invitation (fail-safe by
+   design) and can revoke *itself*. An admin then revokes the second member M2:
+   succeeds, and M2 is pinged before its push endpoint is cleared.
+S5b2 Managed account, the last admin — the sole admin tries to demote itself and
+   to be revoked by a member: both refused (409). It then revokes *itself*:
+   succeeds, stranding the remaining members. `sund admin device promote`
+   recovers the account and pings every device. Concurrency: two admins revoking
+   each other at once leave exactly one non-revoked admin, never zero.
+S5b3 Flat account, no roles to change — `/role` is refused (409) whoever calls
+   it, and there is no request that changes the account's administration mode.
 S5c No silent administration — a member device, woken only by the ordinary ping,
    refetches and sees the role change an admin made. Assert: every device in the
    account except the actor was pinged (not just the admins), role is present in

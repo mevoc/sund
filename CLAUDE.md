@@ -60,10 +60,15 @@ intent.
   fingerprint-pinned server address, one-binary stack requirement. New in 0.5:
   a per-device storage ceiling beside the per-account one (decision 13) — a
   bulkhead so one device's backlog cannot exhaust the account's headroom. Needs
-  no new linkage (the quota check already resolves queue → owner device) and no
-  endpoint (operator CLI, like the account cap); explicitly *not* a sender-side
-  limit, since there is no sender_device. 0.5 also syncs the data-model table
-  with the schema, closing a deviation. From 0.4:
+  no new linkage (the quota check already resolves queue → owner device).
+  *Writing* a ceiling has no endpoint — it is an operator CLI act, because it is
+  a denial-of-service primitive — but it must not therefore be silent: a change
+  pings the account, `quota_bytes` is in the device list, and `GET /v1/me/quota`
+  lets a device read its own ceiling and usage, so being capped is
+  distinguishable from being full. Explicitly *not* a sender-side limit, since
+  there is no sender_device, and it makes the refusal a cheaper oracle for a
+  sender probing headroom — stated in the threat model rather than buried. 0.5
+  also syncs the data-model table with the schema, closing a deviation. From 0.4:
   an optional per-account administration model — `flat` (default, unchanged) vs.
   `managed` accounts, an `admin`/`member` device role, and admin-only revocation
   and invitation minting. Self-revocation is unconditional, an account never

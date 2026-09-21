@@ -55,7 +55,6 @@ Operator surface (the Holm bar):
                                                    lost its only admin; pings
                                                    every device, like any other
                                                    role change
-    sund admin account quota <account-id> <bytes>→ change the account ceiling
     sund admin device quota <device-id> [<bytes>]→ per-device storage ceiling
                                                    (PRD 0.5); 0 removes it,
                                                    omitted shows it; a change
@@ -164,9 +163,12 @@ below. Three things sit beside the check:
   to promote or demote, and the account cannot be walked into managed one
   demotion at a time. The mode itself has no endpoint at all.
 
-Every administrative act — register, revoke, role change *and* invitation mint —
-pings every device in the account except the one that performed it: not only the
-admins, and never silently. Two consequences a client implementer needs. A
+Every administrative act — register, revoke, role change, invitation mint, and
+a storage-ceiling change — pings every device in the account except the one that
+performed it: not only the admins, and never silently. The two acts the operator
+performs rather than a device, `sund admin device promote` and
+`sund admin device quota`, have no actor to exclude and so ping *every* device
+(PRD → Devices). Two consequences a client implementer needs. A
 revocation pings its *target* as well, which means the ping goes out before the
 target's push endpoint is cleared, in the same step — best-effort, so an
 unreachable device learns from its next request instead. And since a ping carries
@@ -416,6 +418,11 @@ network, no disk beyond in-memory SQLite. Covers the invariants testable in isol
 - a ceiling change pings every device in the account, `quota_bytes` appears in
   the device list, and `GET /v1/me/quota` returns the caller's own ceiling and
   stored bytes — a device can always tell being capped from being full
+- the two leaks a later convenience would reintroduce, asserted rather than
+  assumed: `/v1/me/quota` is self-scoped and its response carries no
+  account-level figure (an account-wide stored-bytes number readable by every
+  member is a peer activity signal), and the device-list response carries
+  ceilings but never usage
 - message TTL expiry and deletion-unread
 - revocation kills the identity key and owned queues in one step
 - administration: the admin-only acts refused for a member in a managed account
@@ -483,7 +490,11 @@ S5c No silent administration — a member device, woken only by the ordinary pin
 S6 Invitation abuse — reuse a consumed token, use an expired one, use a revoked
    one: all fail closed; no device row is created.
 S7 Tenant isolation — two accounts on one server: cross-account queue reads,
-   sends, bundle fetches and device-list reads all fail.
+   sends, bundle fetches and device-list reads all fail. (The "sends" half is
+   contested: see `docs/deviations.md`, 2026-09-20 — as built, a send
+   authenticates with the per-queue sender key alone and no account is
+   consulted. The entry states the two ways to close it; this scenario is
+   written to the spec, which is why it is listed there as open.)
 S8 Blindness audit — the structural test. After every other scenario including
    S10, whose traffic is the bulkiest, open sund.db directly
    and assert: no table or column links a sender device to a queue; every
@@ -492,6 +503,7 @@ S8 Blindness audit — the structural test. After every other scenario including
    Architecture Principle as an executable regression test.
 S9 Operator surface — with undelivered messages in queues: cp the DB (backup),
    kill the binary, restart against the copy, drain — everything survives.
+   "Install. Deploy. Backup. Upgrade." is tested, not hoped.
 S10 Quota bulkhead — two devices in one account, each given its own ceiling well
    under the account's. Because ceilings are operator-written, the scenario shells
    out to `sund admin device quota` against the same database the running binary
@@ -505,7 +517,6 @@ S10 Quota bulkhead — two devices in one account, each given its own ceiling we
    `GET /v1/me/quota` on the capped device reports the ceiling it was given.
    Then clear that ceiling (0) and assert the device can again consume up to the
    account cap — 0.4 behaviour, unchanged underneath.
-   "Install. Deploy. Backup. Upgrade." is tested, not hoped.
 
 CI runs both suites on every commit; the unit suite additionally runs as a
 pre-commit hook. Exceeding the time targets above is treated as a regression.

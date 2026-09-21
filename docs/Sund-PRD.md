@@ -637,7 +637,7 @@ Explicitly NOT hidden — residual metadata a host can observe:
   account-wide state it otherwise cannot see. It does not mean "this queue is
   full": a device ceiling covers that device's stored bytes across every queue it
   owns, including queues the sender holds no ID for and cannot enumerate. And
-  and where the device ceiling is the lower of the two — the usual reason to set
+  where the device ceiling is the lower of the two — the usual reason to set
   one, though nothing requires it — refusals fire more often than under an
   account ceiling alone.
 

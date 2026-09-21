@@ -279,14 +279,12 @@ Not built yet (relative to the PRD / API sketch)
   path. The 507 body must also stop naming the account level (it currently reads
   "account storage quota exceeded"), since a sender must not learn which ceiling
   tripped. The concurrency caveat below applies per-device exactly as it does
-  per-account. So: a column, a CLI command, one self-scoped read endpoint, a new
-  ping trigger and a second bound on an existing check — no new linkage, the
-  enforcement join already being there. The
-  enforcement query in `internal/store/queue.go` already joins
+  per-account. The enforcement query in `internal/store/queue.go` already joins
   queues → devices → accounts and sums per account; the device level is the same
-  query filtered on `q.owner_device` instead of `d.account_id`, so this is a
-  column, a CLI command and a second bound on an existing check — no new linkage
-  and no endpoint. Today the account cap is the only ceiling.
+  query filtered on `q.owner_device` instead of `d.account_id`. So: a column, a
+  CLI command, one self-scoped read endpoint, a new ping trigger and a second
+  bound on an existing check — no new linkage, the join already being there.
+  Today the account cap is the only ceiling.
 - Account administration (PRD 0.4, decision 12): `accounts.admin_mode`,
   `devices.role`, `invitations.grants_role`, `POST /v1/devices/{id}/role`, the
   admin-only checks on revoke and invitation minting, the last-admin invariant,

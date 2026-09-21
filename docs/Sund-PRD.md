@@ -150,13 +150,13 @@ Devices
   and its undelivered messages are dropped along with its queues. Revocation is
   destructive and has no undo — part of why an account may want it gated.
 - Device-list change propagation: every administrative act — registration,
-  revocation, role change and invitation minting — triggers a contentless ping to
-  every device in the account other than the one that performed it, never only to
-  the admins. This includes an operator-side `sund admin device promote`, which
-  pings *every* device since no device performed it: the host is the one party
-  the role model cannot bind, so it must not also hold the only silent role
-  change, and the same goes for `sund admin device quota`: changing a device's
-  ceiling is an administrative act and pings the account like any other. A
+  revocation, role change, invitation minting and a storage-ceiling change —
+  triggers a contentless ping to every device in the account other than the one
+  that performed it, never only to the admins. Two of the five are performed by
+  the operator rather than by a device — `sund admin device promote` and
+  `sund admin device quota` — and those ping *every* device, there being no actor
+  to exclude. That is not a courtesy: the host is the one party none of this
+  binds, so it must not also hold the only silent act. A
   revocation pings its target too — it is a device the act was
   performed on, and the one with most reason to be told — so the ping is
   attempted *before* the target's push endpoint is cleared, in the same step; an

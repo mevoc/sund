@@ -272,7 +272,10 @@ Not built yet (relative to the PRD / API sketch)
   `sund admin account create --admin-mode` and `sund admin device promote`, role
   in the device-list response, and the two new ping triggers (a role change and
   an invitation mint must wake the account's other devices; today only
-  registration and revocation do). Nothing of it exists: today every device is
+  registration and revocation do). It also adds a client obligation Sund cannot
+  verify — a client MUST render each device's role and surface administrative
+  changes rather than absorbing the ping — which belongs in "What a client must
+  implement" once roles exist. Nothing of it exists: today every device is
   effectively an admin, which is exactly PRD 0.4's `flat` mode, so implementing
   it should be additive rather than a behaviour change for existing deployments
   (an existing database migrates to `flat`).

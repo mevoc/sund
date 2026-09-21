@@ -62,13 +62,16 @@ intent.
   `managed` accounts, an `admin`/`member` device role, and admin-only revocation
   and invitation minting. Self-revocation is unconditional, an account never
   loses its last admin to an act performed on another device, and no
-  administrative act is invisible to the devices it affects. **Opt-in and
+  administrative act is invisible to a *conforming* client (Sund pings every
+  other device and publishes role; whether a client surfaces either is the
+  consumer's obligation and unverifiable server-side). **Opt-in and
   contested:** family-beacon has declined the mode on anti-stalkerware grounds
   (its roster spec: no privileged remover), and PRD 0.4 records that
-  disagreement rather than settling it — raise it, don't pick a winner. From 0.3: push-ping fan-in in the threat model, invitation
-  semantics (single-use, 15-min TTL, revocable), device-list changes push +
-  mandatory refetch, a per-commit test strategy (unit + system suites, blindness
-  audit), and the stack lock, July 2026: Go + SQLite (family-beacon
+  disagreement rather than settling it — raise it, don't pick a winner. From
+  0.3: push-ping fan-in in the threat model, invitation semantics (single-use,
+  15-min TTL, revocable), device-list changes push + mandatory refetch, a
+  per-commit test strategy (unit + system suites, blindness audit), and the
+  stack lock, July 2026: Go + SQLite (family-beacon
   ARCHITECTURE.md updated to match). Remaining open: iOS gateway operations,
   signed administrative statements. (Blob storage and queue rotation are
   resolved — see the PRD's "Resolved since first listed as open".)

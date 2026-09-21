@@ -126,7 +126,10 @@ Devices
 - Device-list change propagation: every administrative act — registration,
   revocation, role change and invitation minting — triggers a contentless ping to
   every device in the account other than the one that performed it, never only to
-  the admins. On waking, a client refetches the device list (and, after a mint,
+  the admins. This includes an operator-side `sund admin device promote`, which
+  pings *every* device since no device performed it: the host is the one party
+  the role model cannot bind, so it must not also hold the only silent role
+  change. On waking, a client refetches the device list (and, after a mint,
   the invitation list). Pings are best-effort — clients MUST additionally refetch
   the device list before establishing any new session or pairing, so a missed ping
   costs latency, never security.
@@ -178,6 +181,14 @@ Devices
       know. This is an obligation of the same kind as "consuming apps must state
       the residual metadata honestly", and it is backed by the same thing —
       the consumer's own review, not the server.
+
+  A refused attempt is invisible, and that is worth naming rather than leaving to
+  be discovered: a member that probes for escalation — trying to revoke a peer,
+  mint an invitation, promote itself — changes nothing, so nothing pings and
+  nothing is stored. Recording the attempt would mean recording the actor and its
+  target, which is the edge the model exists to avoid. Sund accepts unobserved
+  probing as the price of storing no administration log; a consumer that wants
+  failed attempts surfaced has to carry them client-side.
 
   What a member learns is bounded on purpose. It sees the account's current roles
   and is woken whenever they change; it does not learn *which* admin acted, or
@@ -447,6 +458,13 @@ Explicitly NOT hidden — residual metadata a host can observe:
   traffic timing can often guess the sender despite pseudonymous queues. The
   improvement over PRD 0.1 is that the graph is not *recorded*; it is not that
   traffic analysis is defeated.
+- Who acted on whom, in live traffic: a revocation or role change carries the
+  acting device's id in its signature headers and names its target in the path,
+  so a host watching requests sees the pair even though nothing stores it. This
+  is the management-plane twin of push-ping fan-in — runtime, not recorded — and
+  the same honesty applies: the binary keeps no access log (it logs errors only),
+  so the claim holds today at runtime as well as in the schema, but a host that
+  chose to log would learn it.
 - The account's administration shape, from all three columns 0.4 adds:
   `admin_mode` tells a host whether an account is flat or managed before any
   device has registered; `role` tells it which device administers a managed

@@ -46,7 +46,9 @@ Operator surface (the Holm bar):
         [--admin-mode flat|managed]              → administration mode (PRD 0.4);
                                                    flat is the default
     sund admin device promote <device-id>        → recover a managed account that
-                                                   lost its only admin
+                                                   lost its only admin; pings
+                                                   every device, like any other
+                                                   role change
     cp sund.db backup/                            → backup
     mv sund-new sund && systemctl restart sund    → upgrade
 

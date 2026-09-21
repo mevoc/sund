@@ -23,7 +23,8 @@ At a glance
   real compiled binary with real crypto. ~49 Go cases, ~29 system tests, both
   per-commit. Includes the blindness audit (S8) and operator-survival (S9).
 - Not yet built: the account administration model of PRD 0.4 (administration
-  modes, device roles), iOS push provider, metrics. TLS/fingerprint pinning is
+  modes, device roles), the per-device storage quota of PRD 0.5, iOS push
+  provider, metrics. TLS/fingerprint pinning is
   implemented as an opt-in mode (`serve --tls-dir`); making it the default is a
   follow-up. See "Not built yet".
 
@@ -149,7 +150,10 @@ Behavior details a consumer should know
   revoked.
 - Quota: per account, counted on the owner (recipient) side. A send that would
   exceed `quota_bytes` is refused with 507; space frees as messages are acked or
-  expire. Set via `sund admin account create --quota-bytes N` or a named class
+  expire. **The cap is account-wide only** — there is no per-device ceiling, so
+  one device's backlog consumes headroom its peers share. PRD 0.5 adds a second,
+  per-device level; none of it is implemented. Set via
+  `sund admin account create --quota-bytes N` or a named class
   (standard = 64 MiB, large = 1 GiB). 0 = unlimited.
 - Invitations: single-use, default 15-minute TTL, atomically consumed by the
   first registration. Minting returns a non-secret invitation id alongside the
@@ -266,6 +270,13 @@ Run both with `make test-all`.
 
 Not built yet (relative to the PRD / API sketch)
 
+- Per-device storage quota (PRD 0.5, decision 13): `devices.quota_bytes`,
+  `sund admin device quota`, and the second ceiling in the append path. The
+  enforcement query in `internal/store/queue.go` already joins
+  queues → devices → accounts and sums per account; the device level is the same
+  query filtered on `q.owner_device` instead of `d.account_id`, so this is a
+  column, a CLI command and a second bound on an existing check — no new linkage
+  and no endpoint. Today the account cap is the only ceiling.
 - Account administration (PRD 0.4, decision 12): `accounts.admin_mode`,
   `devices.role`, `invitations.grants_role`, `POST /v1/devices/{id}/role`, the
   admin-only checks on revoke and invitation minting, the last-admin invariant,

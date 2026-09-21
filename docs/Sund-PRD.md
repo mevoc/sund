@@ -2,20 +2,26 @@ Sund
 
 «A blind strait between your devices.»
 
-Status: PRD v0.4 (Draft) — supersedes PRD 0.3
+Status: PRD v0.5 (Draft) — supersedes PRD 0.4
 
 > Working name: **Sund** (Swedish: a strait between islands — the channel between
 > skerries; also "sound, healthy"). The kernel extracted from Skerry
-> (`../skerry`). This revision adds one thing: an optional per-account
-> administration model (decision 12). An account may now restrict revoking a
-> device, minting an invitation and changing a role to devices holding an admin
-> role, instead of granting all three to every device equally. The flat account
-> of PRD 0.3 remains the default and is unchanged in behaviour, and the mode is
-> opt-in per account, and family-beacon's roster spec as written is incompatible
-> with it on anti-stalkerware grounds — a conflict recorded under Threat model →
-> Administration rather than settled here. The change is listed at the end under
-> "Decisions in this revision"; the eleven decisions of PRD 0.2 and 0.3 carry
-> over unchanged.
+> (`../skerry`). This revision adds one thing: an optional **per-device** storage
+> ceiling beside the per-account one (decision 13), so that one device's backlog
+> cannot consume headroom the whole account shares. It is cheap on every axis
+> that matters here — no new linkage, because the quota check already resolves
+> queue → owner device; no new endpoint, because ceilings are an operator knob
+> like the account ceiling already is; and no change for anyone who does not set
+> one. It is deliberately not a sender-side limit, which the design cannot offer.
+> A second, smaller change: the Data model table is brought back into line with
+> the schema, closing a deviation recorded on 2026-09-18.
+>
+> The twelve decisions of PRD 0.2, 0.3 and 0.4 carry over unchanged, including
+> 0.4's optional per-account administration model — for which `flat` remains the
+> default and family-beacon's roster spec remains incompatible on
+> anti-stalkerware grounds, a conflict recorded under Threat model →
+> Administration rather than settled there. Changes are listed at the end under
+> "Decisions in this revision".
 
 ---
 
@@ -94,6 +100,13 @@ Accounts
 - Multi-tenant isolation, per-account quotas, root-admin provisioning.
 - Quotas are attributed to the queue owner's account (the recipient side — the
   side the server knows). Senders stay pseudonymous without breaking accounting.
+- Storage quota has two levels, both recipient-side and both optional: a ceiling
+  on the account, and a ceiling on an individual device's stored payloads. A send
+  is refused if *either* would be exceeded. Device ceilings need not sum to the
+  account ceiling — over-committing is normal and correct, exactly as it is for
+  disk quotas — and a device with no ceiling of its own is bounded only by the
+  account's, which is PRD 0.4 behaviour. See Devices → Storage quota for what the
+  second level does and does not bound.
 - Administration mode: an account is `flat` (default) or `managed`, chosen at
   provisioning and not changeable afterwards — there is no endpoint for it, and
   that refusal is the whole specification. It decides which role a device gets
@@ -224,6 +237,39 @@ Devices
   and stays unrecorded (Threat model → Trust boundary). It is also optional, and
   there is a serious argument that a family-shaped consumer should decline it —
   see Threat model → Administration.
+- Storage quota: a device may carry its own ceiling on the total size of the
+  undelivered payloads sitting in the queues it owns. This costs no new linkage.
+  Quota is already attributed by resolving queue → owner device → account, so
+  counting to the device instead of to the account uses the join the server
+  already performs; it learns nothing it was not already computing, and queue
+  ownership is already disclosed as the one sanctioned transport→management link
+  (Threat model).
+
+  What the second level buys is containment, and it lands on a case the threat
+  model otherwise leaves open. With a single account-wide ceiling, a device whose
+  queues fill up does not merely stop receiving — it exhausts the ceiling every
+  other device in the account shares, so one flooded device can silence the whole
+  family. A per-device ceiling turns "one member's queues take the account down"
+  into "one member's queues fill up", which is the difference between a
+  family-wide outage and one person's backlog. It is a bulkhead, not a defence.
+
+  What it is **not**, and the misreading to head off: it is not a sender-side
+  rate limit. There is no sender_device and there will not be one, so the server
+  cannot charge a sender, throttle one, or tell two senders apart. A device
+  ceiling bounds what a recipient can *absorb*, never what a sender can *emit*.
+  A hostile member with a valid sender ID can still fill its victim's queues to
+  that victim's ceiling; what changed is that it can no longer reach past the
+  victim into everyone else's headroom. Bounding the sender would require the
+  sender↔queue link the whole design refuses (see Queues).
+
+  Ceilings are set by the operator (`sund admin device quota`), not over the API,
+  and there is deliberately no endpoint for them. A per-device ceiling is a
+  denial-of-service primitive in the wrong hands — setting a peer's ceiling to
+  one byte silences it — so keeping it out of band means it adds no authorization
+  question, no interaction with the administration model of decision 12, and
+  nothing a hostile member can reach. There is also no derived default: dividing
+  the account ceiling by the device count would silently re-cap every existing
+  device whenever a new one enrolled.
 - Key bundles: each device may publish a small, size-capped, opaque blob of
   client-side key material (e.g. prekeys for X3DH-style async session setup),
   retrievable by other devices in the account. The server never interprets it —
@@ -292,7 +338,7 @@ Queues
 Messages
 - Send (by sender ID), receive/ack (by recipient ID), per-message TTL, delivery
   status. Queues survive offline receivers; expired messages are deleted unread.
-- Payloads are opaque ciphertext, size-capped per quota.
+- Payloads are opaque ciphertext, bounded by both quota levels (Accounts).
 
 Push wake-up
 - A ping carries nothing — no payload, no queue ID. It only tells a device
@@ -309,16 +355,33 @@ Health and metrics endpoints.
 
 Data model (the whole of it)
 
-accounts     — id, created, quota, status, admin_mode
+accounts     — id, created, quota (class label), quota_bytes, status, admin_mode
 devices      — id, account_id, public_key, role, push_endpoint, capabilities,
-               created, last_seen, revoked
+               quota_bytes, created, last_seen, revoked
 bundles      — device_id, blob (opaque, size-capped), updated
-invitations  — token_hash, account_id, created, expires, consumed, grants_role
+invitations  — id, token_hash, account_id, created, expires, consumed, revoked,
+               grants_role
 queues       — recipient_id, sender_id, owner_device, recipient_key, sender_key,
                created, retired
-messages     — queue_id, payload, received_at, ttl, status
+messages     — seq, id, queue_id, payload, received_at, expires, status
 
 There is deliberately no sender_device column anywhere in the transport plane.
+
+A `quota_bytes` of 0 means "no ceiling at this level", so an account or device
+that has never been given one behaves exactly as it did before the column
+existed — which is what makes both quota levels additive rather than a migration.
+
+This table is meant to be checkable against the schema, and in 0.5 it is again:
+the accounts, invitations and messages rows above were out of step with
+`internal/store/store.go` (recorded in `docs/deviations.md`, 2026-09-18) and are
+corrected here. `seq` gives a stable per-queue delivery order at second-precision
+timestamps, `expires` is the absolute form of the per-message TTL that the purge
+query needs, and `invitations.id`/`revoked` are what decision 7's listable and
+revocable invitations actually require. One item from that entry is deliberately
+left open rather than papered over: `messages.status` exists but is only ever
+`'stored'`, since an ack deletes the row, so the "delivery status" the Messages
+section promises is not a feature yet. Either define the statuses or drop the
+phrase — a product decision, not a documentation one.
 
 The three columns added in 0.4 — admin_mode, role and grants_role — are
 attributes of an account, a device and a token. None of them is an edge: nothing
@@ -456,6 +519,9 @@ Defended against:
   token grants: a stolen admin-granting invitation enrolls a device that can then
   revoke and enroll, which is a reason to mint those sparingly and to prefer a
   short TTL still.
+- Storage exhaustion spreading past its target: with per-device ceilings set, a
+  device whose queues are flooded stops receiving without consuming the ceiling
+  its peers depend on. The flood itself is not prevented (see Trust boundary).
 - Member device turned hostile, in a managed account: it cannot revoke another
   device, enroll one of its own, or change a role. In a flat account it can do
   all three — that is the mode's stated cost, not a defect. The converse case, an
@@ -491,6 +557,14 @@ Explicitly NOT hidden — residual metadata a host can observe:
   account; and `grants_role` tells it, at mint time, that an account is about to
   add an admin rather than a member. A flat account exposes only the first, and
   exposes it uniformly.
+- What a refused send discloses. A 507 tells the sender that storage is full on
+  the recipient side. With an account ceiling alone that is a statement about the
+  whole account — information about devices the sender may not know exist. A
+  device ceiling that trips first narrows it to the queue the sender already
+  holds an ID for, which is less disclosure rather than more; but the failure is
+  still observable, and a sender can distinguish "this queue is full" from "this
+  queue is gone" (404, a retired queue). Neither reveals who else is in the
+  account.
 - On iOS, wake timing (though nothing else) is additionally visible to the vendor
   push gateway and to Apple — see Push architecture.
 
@@ -509,9 +583,12 @@ gated by holding a valid token instead. Consequences a consumer must weigh:
   unsolicited. A managed account does not change this.
 - Because quota is attributed to the recipient and senders are pseudonymous (no
   sender_device to rate-limit), such a member can consume a victim's quota by
-  filling its queues; the transport plane cannot throttle per sender. A managed
-  account does not change this either — the remedy is still revocation, now by an
-  admin rather than by anyone.
+  filling its queues; the transport plane cannot throttle per sender. Neither the
+  administration model nor per-device quota changes that — the remedy is still
+  revocation. What per-device quota (decision 13) changes is the blast radius: a
+  victim with its own ceiling absorbs the flood alone instead of exhausting the
+  headroom every other device in the account shares. Containment, not defence,
+  and worth having only because the undefended case is otherwise account-wide.
 - In a flat account, revocation is the remedy against a member turned hostile and
   is equally available *to* that member: any device may revoke any other. A
   managed account is the answer to that symmetry.
@@ -640,7 +717,8 @@ The five decisions of PRD 0.2 (SimpleX queue addressing, UnifiedPush/ntfy push
 leg, Signal-style device management, fingerprint-pinned server address,
 one-binary stack requirement) carry over unchanged. Items 6–11 were added in 0.3:
 the three open items surfaced by the implementation guide, the test strategy, the
-stack lock and the second transport-trust mode. Item 12 is new in 0.4:
+stack lock and the second transport-trust mode. Item 12 came in 0.4; item 13 is
+new in 0.5:
 
 6. Push-ping fan-in made explicit. Confirmed: resolving queue → owner device at
    delivery time is the only transport→management linkage in the system, the
@@ -702,6 +780,24 @@ stack lock and the second transport-trust mode. Item 12 is new in 0.4:
     two roles, one flag, no permission system, no actor recorded for any
     administrative act; the account stays the trust boundary and no may-talk-to
     graph is introduced.
+13. Per-device storage quota. A device may carry its own ceiling on the stored
+    payloads in the queues it owns, enforced alongside the account ceiling; a
+    send is refused if either would be exceeded, and 0 at either level means no
+    ceiling there, so both are additive. Cheap by construction: the quota check
+    already resolves queue → owner device → account, so counting to the device
+    reuses a join the server performs anyway and discloses nothing new — the one
+    new column, `devices.quota_bytes`, is a per-device attribute, not an edge,
+    the same test decision 12's `role` had to pass. What it is for: with only an
+    account ceiling, one device's flooded queues exhaust the headroom every other
+    device shares, so a single member can silence the family by being filled up.
+    Per-device ceilings make that a bulkhead. What it is **not**: a sender-side
+    limit. There is no sender_device, so the server cannot charge or throttle a
+    sender; the ceiling bounds absorption, never emission, and the flood itself
+    remains undefended (Threat model → Trust boundary). Set by the operator
+    (`sund admin device quota`), with no API endpoint and no derived default,
+    because a per-device ceiling is a denial-of-service primitive in a peer's
+    hands and because keeping it out of band means it raises no authorization
+    question and does not interact with decision 12 at all.
 
 Open decisions remaining
 

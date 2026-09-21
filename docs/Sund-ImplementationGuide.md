@@ -1,6 +1,11 @@
 Sund — Implementation Guide
 
-Status: v0.3 (Draft) — companion to Sund-PRD.md
+Status: v0.4 (Draft) — companion to Sund-PRD.md
+
+> New in 0.4: the per-device storage quota of PRD 0.5 (decision 13) — the
+> operator surface, the enforcement rule and the test coverage. It adds no
+> endpoint, which is the point: ceilings are an operator knob like the account
+> ceiling, so nothing in the API sketch changes.
 
 > New in 0.3: the account administration model of PRD 0.4 — administration modes,
 > the `admin`/`member` role, the role-granting invitation and the last-admin
@@ -49,6 +54,8 @@ Operator surface (the Holm bar):
                                                    lost its only admin; pings
                                                    every device, like any other
                                                    role change
+    sund admin device quota <device-id> <bytes>  → per-device storage ceiling
+                                                   (PRD 0.5); 0 removes it
     cp sund.db backup/                            → backup
     mv sund-new sund && systemctl restart sund    → upgrade
 
@@ -390,6 +397,11 @@ network, no disk beyond in-memory SQLite. Covers the invariants testable in isol
 - queue ID generation: recipient_id and sender_id unrelated, unpredictable
 - sender-key binding on first SEND; rejection of a second binding attempt
 - quota attribution to the owner account; enforcement at the cap
+- per-device quota: enforced alongside the account cap, refusing when *either*
+  would be exceeded; 0 at either level means no ceiling there; device ceilings
+  that over-commit the account ceiling behave (the account cap still binds);
+  a device's usage counts only the queues it owns, so one device filling up
+  leaves a peer with its own ceiling still able to receive
 - message TTL expiry and deletion-unread
 - revocation kills the identity key and owned queues in one step
 - administration: the admin-only acts refused for a member in a managed account
@@ -456,6 +468,12 @@ S5c No silent administration — a member device, woken only by the ordinary pin
    name no actor for any of the acts — there is no "X revoked Y" record to find.
 S6 Invitation abuse — reuse a consumed token, use an expired one, use a revoked
    one: all fail closed; no device row is created.
+S10 Quota bulkhead — two devices in one account, each with its own ceiling well
+   under the account's. Fill the first device's queues until sends to it are
+   refused with 507; assert the second device still receives, that the account
+   ceiling was never reached, and that draining the first frees only its own
+   headroom. Then clear the first device's ceiling (0) and assert it can again
+   consume up to the account cap — the 0.4 behaviour, unchanged underneath.
 S7 Tenant isolation — two accounts on one server: cross-account queue reads,
    sends, bundle fetches and device-list reads all fail.
 S8 Blindness audit — the structural test. After S1–S7, open sund.db directly

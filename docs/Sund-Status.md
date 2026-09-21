@@ -1,6 +1,7 @@
 Sund — Implementation Status
 
-Status: v0.1 (snapshot, 2026-07-20) — describes the code, not the plan
+Status: v0.1 (snapshot, 2026-07-20; "Not built yet" refreshed against PRD 0.4 on
+2026-09-21) — describes the code, not the plan
 
 This is a snapshot of what the Sund binary actually does as of the storage-quota
 commit, written for the people who build on it — chiefly family-beacon
@@ -21,7 +22,8 @@ At a glance
 - Tests: a Go unit suite and a Python system suite (`beaconsim`) that drives the
   real compiled binary with real crypto. ~49 Go cases, ~29 system tests, both
   per-commit. Includes the blindness audit (S8) and operator-survival (S9).
-- Not yet built: iOS push provider, metrics. TLS/fingerprint pinning is
+- Not yet built: the account administration model of PRD 0.4 (trust modes,
+  device roles), iOS push provider, metrics. TLS/fingerprint pinning is
   implemented as an opt-in mode (`serve --tls-dir`); making it the default is a
   follow-up. See "Not built yet".
 
@@ -137,8 +139,11 @@ Behavior details a consumer should know
 - Revocation: one atomic step kills the identity key, clears the push endpoint,
   and retires every queue the device owns (dropping their messages). The revoked
   device's signed requests then fail and its queues 404. The account's other
-  devices are pinged to refetch and rotate. Any device in an account may revoke
-  another (admin-only is app-level policy). A revoked device stays listed, flagged
+  devices are pinged to refetch and rotate. **Any device in an account may revoke
+  any other, including itself** — the binary has no role model. PRD 0.4 replaces
+  this with an optional per-account administration model (flat/managed accounts,
+  `admin`/`member` roles); none of it is implemented, so a consumer must not rely
+  on a revocation being gated today. A revoked device stays listed, flagged
   revoked.
 - Quota: per account, counted on the owner (recipient) side. A send that would
   exceed `quota_bytes` is refused with 507; space frees as messages are acked or
@@ -187,12 +192,15 @@ receives); on iOS, wake timing at the vendor gateway and Apple. In a small accou
 the anonymity set is small — Sund does not claim traffic-analysis resistance; it
 guarantees the graph is not *recorded*. Consuming apps must state this honestly.
 
-Trust boundary: every non-revoked device in an account is trusted equally. The
+Trust boundary: every non-revoked device in an account is trusted equally — as
+built, that includes the administrative acts (revoking a device, minting an
+invitation), which PRD 0.4 gates behind a role but the binary does not. The
 device list is visible to all members, and the server enforces no "which member
-may reach which" policy. If a consumer publishes reachable key bundles, any member
-device can initiate to any peer; since quota is charged to the recipient and
-senders are pseudonymous (nothing to rate-limit), a hostile member can fill a
-victim's queues, and revocation is the only server-side remedy. Consumers that
+may reach which" policy (nor will it — that one is the consumer's by design).
+If a consumer publishes reachable key bundles, any member device can initiate to
+any peer; since quota is charged to the recipient and senders are pseudonymous
+(nothing to rate-limit), a hostile member can fill a victim's queues, and
+revocation is the only server-side remedy. Consumers that
 can't assume mutual trust use grant-only reachability (bundles without a self-serve
 address) and enforce peer-acceptance client-side. See PRD → Threat model (Trust
 boundary) and Devices → Key bundles (Reachability).
@@ -256,6 +264,13 @@ Run both with `make test-all`.
 
 Not built yet (relative to the PRD / API sketch)
 
+- Account administration (PRD 0.4, decision 12): `accounts.trust_mode`,
+  `devices.role`, `invitations.grants_role`, `POST /v1/devices/{id}/role`, the
+  admin-only checks on revoke and invitation minting, the last-admin invariant,
+  and role in the device-list response. Nothing of it exists: today every device
+  is effectively an admin, which is exactly PRD 0.4's `flat` mode, so
+  implementing it should be additive rather than a behaviour change for existing
+  deployments (an existing database migrates to `flat`).
 - Pinned TLS is opt-in, not the default: plain HTTP remains the flagless default
   and the container/compose still serve HTTP. Making pinned TLS the self-host
   default (and enabling it in the image) is a follow-up. Client pinning is proven

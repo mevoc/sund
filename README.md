@@ -9,7 +9,7 @@ encrypted messages between a user's devices, plus the device management that
 makes that trustworthy. The server transports sealed envelopes; it never
 interprets them. (Working name.)
 
-**Spec:** [`docs/Sund-PRD.md`](docs/Sund-PRD.md) (current, v0.3) ·
+**Spec:** [`docs/Sund-PRD.md`](docs/Sund-PRD.md) (current, v0.4) ·
 [`docs/Sund-ImplementationGuide.md`](docs/Sund-ImplementationGuide.md) ·
 [`docs/Sund-PriorArt.md`](docs/Sund-PriorArt.md)
 
@@ -17,8 +17,12 @@ interprets them. (Working name.)
 
 Both planes work, with push wake-up, device revocation, key bundles and
 per-account storage quota wired in, and the blindness (S8) and operator-survival
-(S9) audits pass. One design decision is still open: iOS APNS gateway
-operations. Implemented endpoints:
+(S9) audits pass. Two design decisions are still open: iOS APNS gateway
+operations, and whether administrative acts should be signed by the acting device
+so peers can verify them without trusting the server. PRD 0.4's optional account
+administration model (trust modes, device roles) is specified but **not yet
+implemented** — today every device in an account may revoke any other. Implemented
+endpoints:
 
 | Method & path               | Auth                | Purpose                              |
 | --------------------------- | ------------------- | ------------------------------------ |

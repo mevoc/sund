@@ -2,49 +2,27 @@ Sund
 
 «A blind strait between your devices.»
 
-Status: PRD v0.7 (Draft) — supersedes PRD 0.6
+Status: PRD v0.8 (Draft) — supersedes PRD 0.7
 
 > Working name: **Sund** (Swedish: a strait between islands — the channel between
 > skerries; also "sound, healthy"). The kernel extracted from Skerry
-> (`../skerry`). This revision corrects one thing rather than adding anything:
-> three sentences claimed an isolation the design does not provide and cannot.
-> Sund's transport plane authenticates a send by the per-queue sender key alone,
-> so a send succeeds regardless of which account owns the queue — or whether the
-> sender has an account at all. "Accounts are fully isolated", "no cross-account
-> messaging" and scenario S7 said otherwise. Decision 15 scopes them to what is
-> true: the *management* plane is account-isolated, and so is the recipient side
-> of a queue; the transport plane is authenticated by bearer credential, not by
-> tenancy. No behaviour changes — the code was right and the spec was not.
+> (`../skerry`). This revision does three things, all in the threat model.
+> **Decision 16** withholds a device's storage ceiling from its peers: it is read
+> by the device it caps and by nobody else. The ceiling was published in 0.5 so
+> that a capped device could tell being capped from being full, and self-read
+> already does that — publishing it to peers bought no accountability, since a
+> ceiling confers nothing over anyone and no peer can change one, while selling a
+> real capability, since a peer who knows the ceiling knows exactly what silences
+> its neighbour. **The residual-metadata list is restructured** to say, for each
+> item, who can observe it *and what observing it enables*: a pure disclosure is
+> documented and lived with, an enabler is a design question, and the two were
+> previously run together. `last_seen` joins the list in the process — every
+> member can see when every other member's device last checked in, which was
+> never written down. **And what sharing an account costs** two co-located
+> server components is stated in one place, at Brygga's request (`mevoc/sund` #3).
 >
-> PRD 0.6 removed, for context: the per-message delivery status
-> (decision 14), which described no behaviour — an ack deletes the row, so the
-> column only ever held one value. The Messages section now says positively what
-> the model is (stored until acked; no read receipt) instead of promising a
-> feature that was never built, and the column is gone from the schema. It never
-> reached the wire, so no client contract changes. That closes the last entry
-> carved out of the 2026-09-18 data-model deviation.
->
-> PRD 0.5 added, for context: an optional **per-device** storage
-> ceiling beside the per-account one (decision 13), so that one device's backlog
-> cannot consume headroom the whole account shares. It costs no new linkage: the
-> quota check already resolves queue → owner device. Setting a ceiling stays an
-> operator act with no endpoint, because it is a denial-of-service primitive;
-> *reading* one is not, so a device can see its own ceiling and headroom, and a
-> ceiling change pings the account like any other administrative act — the host
-> must not hold a silent power over a device, which is the rule 0.4 already set
-> for the operator's other command. Nothing changes for a deployment that sets no
-> ceiling. It is deliberately not a sender-side limit, which the design cannot
-> offer, and it makes one disclosure worse rather than better: see the threat
-> model on the refusal as an oracle.
-> A second, smaller change: the Data model table is brought back into line with
-> the schema, closing a deviation recorded on 2026-09-18.
->
-> The twelve decisions of PRD 0.2, 0.3 and 0.4 carry over unchanged, including
-> 0.4's optional per-account administration model — for which `flat` remains the
-> default and family-beacon's roster spec remains incompatible on
-> anti-stalkerware grounds, a conflict recorded under Threat model →
-> Administration rather than settled there. Changes are listed at the end under
-> "Decisions in this revision".
+> Nothing here is implemented: decisions 12, 13 and 16 all sit in
+> `Sund-Status.md` → "Not built yet", which is why 16 costs nothing to apply.
 
 ---
 
@@ -168,18 +146,20 @@ Devices
   destroys nothing), so the fastest possible response to a mis-shared QR is worth
   more than the ability of a hostile member to be obstructive.
 - Explicit device list: every device in an account can see all registered devices
-  (id, role, quota_bytes, created, last_seen, capabilities). Revocation is a
-  first-class
+  (id, role, created, last_seen, capabilities — not quota_bytes, see Storage
+  quota). Revocation is a first-class
   operation; a revoked device's identity key and queue access die immediately,
   and its undelivered messages are dropped along with its queues. Revocation is
   destructive and has no undo — part of why an account may want it gated.
-- Device-list change propagation: every administrative act — registration,
-  revocation, role change, invitation minting and a storage-ceiling change —
-  triggers a contentless ping to every device in the account other than the one
-  that performed it, never only to the admins. Two of the five are performed by
-  the operator rather than by a device — `sund admin device promote` and
-  `sund admin device quota` — and those ping *every* device, there being no actor
-  to exclude. That is not a courtesy: the host is the one party none of this
+- Device-list change propagation: every administrative act that changes what the
+  account's devices see — registration, revocation, role change and invitation
+  minting — triggers a contentless ping to every device in the account other than
+  the one that performed it, never only to the admins. `sund admin device
+  promote` is performed by the operator rather than by a device, so it pings
+  *every* device, there being no actor to exclude. The fifth administrative act,
+  a storage-ceiling change, is the exception that proves the rule: it changes
+  nothing any other device can read, so it pings only the device it affects (see
+  Storage quota). That is not a courtesy: the host is the one party none of this
   binds, so it must not also hold the only silent act. A
   revocation pings its target too — it is a device the act was
   performed on, and the one with most reason to be told — so the ping is
@@ -239,10 +219,12 @@ Devices
 
     - Sund's half, which is testable: role is a field of the device list every
       device reads, and every administrative act — registration, revocation, role
-      change, invitation minting, and (0.5) a storage-ceiling change — pings the
-      account's other devices, never only the admins. The two acts performed by
-      the operator rather than by a device, `promote` and `quota`, ping every
-      device, there being no actor to exclude.
+      change and invitation minting — pings the account's other devices, never
+      only the admins; `promote`, performed by the operator rather than by a
+      device, pings every device, there being no actor to exclude. A
+      storage-ceiling change pings only the device it affects, which is the same
+      rule rather than an exception to it: the party a ceiling is held over is
+      that one device (Storage quota, decision 16).
     - The consumer's half, which Sund requires and cannot verify: a client MUST
       render each device's role, and MUST surface an administrative change to the
       user rather than silently absorbing the ping. A client that does neither is
@@ -335,28 +317,35 @@ Devices
   `sund admin device promote` applies unchanged: the host is the one party none
   of this binds, so it must not also hold the only invisible act. Therefore:
 
-    - A ceiling change is an administrative act. It pings every device in the
-      account, exactly as an operator promote does.
-    - `quota_bytes` is a field of the device list every device already reads, so
-      a device can see its own ceiling and its peers'. The asymmetry is
-      deliberate and worth stating for a client author: a peer's *ceiling* is
-      account-public, because it is static, operator-authored and the thing that
-      must not be set in secret; a peer's *stored bytes* are not, because usage
-      is an activity signal. Ceilings travel in the device list, usage only
-      through `/v1/me/quota`.
-    - `GET /v1/me/quota` returns the calling device's own ceiling and its current
-      stored bytes — self-scoped, like the rest of `/v1/me/*`, and carrying no
-      account-level figure. Account *stored bytes* in particular MUST NOT appear:
-      a figure every member could read would be a coarse activity signal about
-      all of its peers combined, which is exactly what keeping usage out of the
-      device list avoids. This is the one *read* the no-endpoint rule does not
-      cover,
-      and it is what lets a device tell "I am full" from "someone capped me" —
-      without it, a one-byte ceiling would be indistinguishable client-side from
-      honest fullness, which is precisely the silent power the PRD refuses
-      elsewhere. It discloses to a device only what the device's own queues
-      already imply, and Postiljon has an open request for exactly this reading
-      (its `docs/deviations.md`, "Quota headroom cannot be reported").
+    - A ceiling change pings **the device it affects**, and only that device.
+      That is enough to satisfy the rule, because the rule is that power is
+      visible to the party it is held over — and a ceiling is held over exactly
+      one device.
+    - `GET /v1/me/quota` returns the calling device's own ceiling and its own
+      stored bytes. Self-scoped, like the rest of `/v1/me/*`: a device reads its
+      own quota and no one else's. This is the one *read* the no-endpoint rule
+      does not cover, and it is what lets a device tell "I am full" from "someone
+      capped me" — without it, a one-byte ceiling would be indistinguishable
+      client-side from honest fullness, which is precisely the silent power this
+      PRD refuses elsewhere. It may also carry the *account* ceiling, a static
+      figure that binds every device equally and reveals nothing about any of
+      them, so that a device can explain a refusal it hits while still under its
+      own ceiling. Account *stored bytes* MUST NOT appear: a number every member
+      could read would be a coarse activity signal about all of its peers
+      combined. Postiljon has an open request for exactly this read (its
+      `docs/deviations.md`, "Quota headroom cannot be reported").
+
+  Quota is **not** in the device list, and the contrast with `role` is the whole
+  reason (decision 16). A role is authority *over other devices*, so the devices
+  it is held over must be able to see who holds it — that is what makes a managed
+  account non-covert. A ceiling is a constraint on *one device's own storage*. It
+  confers nothing over anyone, so no peer needs it to protect itself, and no peer
+  gains a remedy from seeing it: ceilings are operator-written, so a member who
+  disapproves of a peer's ceiling can do nothing about it anyway. Publishing it
+  would have bought no accountability and sold a real capability — a member who
+  reads a peer's ceiling knows exactly how many bytes will silence it, turning a
+  binary search into one probe (Threat model → residual metadata). Self-scoped
+  keeps the accountability and declines the capability.
 
   A consumer SHOULD surface a ceiling change and a persistent refusal to the
   user rather than retrying quietly; as with the administration model, Sund can
@@ -463,7 +452,9 @@ Push wake-up
   every administrative act — registration, revocation, role change, invitation
   minting, and a storage-ceiling change (management plane, see Devices). A mint
   changes no device list and a ceiling change is not made by a device at all,
-  which is why the trigger is the act and not the list.
+  which is why the trigger is the act and not the list. The ceiling change is
+  also the one act whose ping goes to a single device rather than the account,
+  since it is the only one whose effect no other device can observe.
 - Delivery paths differ fundamentally per platform — see Push architecture.
 
 Health and metrics endpoints.
@@ -645,10 +636,20 @@ Defended against:
 - First-connect MITM: certificate fingerprint pinned via the server address.
 - Replay: signed requests with nonces/timestamps.
 
-Explicitly NOT hidden — residual metadata a host can observe:
+Explicitly NOT hidden — residual metadata. Each item below is stated with two
+things, where earlier revisions stated only the first: **who can observe it**,
+and **what observing it enables**. The distinction earns its place because the
+two need different treatment. A pure disclosure is documented and lived with —
+someone learns a fact and gains no new capability from it. An enabler is a
+design question, because it makes an attack cheaper, quieter or better aimed,
+and the right answer is sometimes not to expose the datum at all. Decision 16 is
+one such answer.
+
+Observable by the **host** (which can also deny service outright, so nothing
+here enables anything it could not already do):
 
 - Traffic timing and sizes, per queue and per device connection.
-- Queue ownership (recipient side) — required for quotas and wake-up.
+- Queue ownership on the recipient side — required for quotas and wake-up.
 - Push-ping fan-in: on every message arrival the server resolves queue → owner
   device in order to ping it. This is the same queue-ownership linkage as quota,
   exercised at runtime rather than stored: a host watching live behavior sees
@@ -661,52 +662,76 @@ Explicitly NOT hidden — residual metadata a host can observe:
   traffic analysis is defeated.
 - Who acted on whom, in live traffic: a revocation or role change carries the
   acting device's id in its signature headers and names its target in the path,
-  so a host watching requests sees the pair even though nothing stores it. This
-  is the management-plane twin of push-ping fan-in — runtime, not recorded — and
-  the same honesty applies: the binary keeps no access log (it logs errors only),
-  so the claim holds today at runtime as well as in the schema, but a host that
-  chose to log would learn it.
-- The account's shape, from the four per-entity columns 0.4 and 0.5 add
-  (`devices.quota_bytes` joins the three below; it is operator-authored, so the
-  host learns nothing from it that it did not itself write, though peers do —
-  see Devices → Storage quota):
-  `admin_mode` tells a host whether an account is flat or managed before any
-  device has registered; `role` tells it which device administers a managed
-  account; and `grants_role` tells it, at mint time, that an account is about to
-  add an admin rather than a member. A flat account exposes only the first, and
-  exposes it uniformly.
-- What a refused send discloses — the one item in this list observable by a
-  *sender* rather than by the host, and the thing decision 13 makes worse rather
-  than better. Mechanically: the refusal says storage is full on the recipient
-  side at one of the two levels and does not say which, which it MUST NOT, since
-  a sender able to tell "account full" from "device full" would learn about
-  account-wide state it otherwise cannot see. It does not mean "this queue is
-  full": a device ceiling covers that device's stored bytes across every queue it
-  owns, including queues the sender holds no ID for and cannot enumerate. And
-  where the device ceiling is the lower of the two — the usual reason to set
-  one, though nothing requires it — refusals fire more often than under an
-  account ceiling alone.
+  so a host watching requests sees the pair even though nothing stores it. The
+  management-plane twin of push-ping fan-in — runtime, not recorded. The binary
+  keeps no access log (it logs errors only), so the claim holds today at runtime
+  as well as in the schema, but a host that chose to log would learn it.
+- The account's shape: `admin_mode` says whether an account is flat or managed
+  before any device has registered, `role` says which device administers a
+  managed account, `grants_role` says at mint time that an account is about to
+  add an admin, and `devices.quota_bytes` says which device has been capped and
+  how far. The host wrote the first and the last itself, so it learns nothing
+  from them. A flat account exposes only `admin_mode`, and uniformly.
 
-  That makes the refusal a coarse oracle, new in 0.5 and the honest price of the
-  feature. A sender holding a queue's live send credential — its sender ID, and
-  on a bound queue the bound key — can send minimum-size payloads to
-  binary-search the remaining headroom, and poll to watch headroom return —
-  learning roughly when the recipient drained (so, when it was last online) or
-  when its messages expired. Sizes and timing are already listed above as visible
-  to the host; this exposes a coarse version of them to a sender too. Against the
-  64 MiB account ceiling the search was expensive and noisy; against a small
-  device ceiling it is cheap. Publishing the ceiling makes it cheaper still for
-  an account member, and this is the price of the transparency that publishing
-  buys: a member reads the victim's ceiling from the device list for free, so one
-  minimum-size probe places the victim's stored bytes just under it, where a
-  non-member must still search for the boundary. The trade — visibility against a
-  silent host, paid for with a sharper oracle between members — is taken
-  knowingly. It reveals no payload content, no other queue, and
-  nothing about who else is in the account — and the prober need not be an
-  account member at all, since a send authenticates with the per-queue sender key
-  alone (`docs/deviations.md`, 2026-09-20, closed in 0.7 by decision 15).
-- On iOS, wake timing (though nothing else) is additionally visible to the vendor
-  push gateway and to Apple — see Push architecture.
+Observable by an **account member**, from the device list every member reads.
+These are the items the anti-stalkerware argument turns on, because the observer
+is someone the subject lives with:
+
+- **`last_seen` for every peer** — when each device last made an authenticated
+  request. This is a presence signal, updated on essentially every interaction,
+  and it is the sharpest thing one family member learns about another here.
+  *Enables:* timing. Knowing when a device is not checking in is knowing when a
+  flood will sit longest before its owner notices, and when an administrative
+  act will go unseen for longest.
+- **`role` for every peer** — who may revoke, invite and promote in a managed
+  account. Published deliberately: authority over other devices must be visible
+  to the devices it is held over (Administration). *Enables:* target selection —
+  revoke the admin first. In a flat account every device holds the same role, so
+  it distinguishes nobody.
+- **The device list itself** — how many devices an account holds and when each
+  enrolled. *Enables:* little on its own.
+- **Not** a peer's storage ceiling, and **not** a peer's stored bytes. Both were
+  candidates and both are withheld; see decision 16 and the refused-send item
+  below for what publishing the ceiling would have enabled.
+
+Observable by a **sender** holding a queue's credentials — who may be an account
+member, or may hold no account on the server at all (decision 15):
+
+- **A refused send (507).** Mechanically: the refusal says storage is full on the
+  recipient side at one of the two levels and does not say which, which it MUST
+  NOT, since a sender able to tell "account full" from "device full" would learn
+  about account-wide state it otherwise cannot see. It does not mean "this queue
+  is full": a device ceiling covers that device's stored bytes across every queue
+  it owns, including queues the sender holds no ID for and cannot enumerate. And
+  where the device ceiling is the lower of the two — the usual reason to set one,
+  though nothing requires it — refusals fire more often than under an account
+  ceiling alone.
+
+  *Enables:* a coarse oracle, and confirmation of a flood. A sender holding a
+  queue's live send credential — its sender ID, and on a bound queue the bound
+  key — can send minimum-size payloads to binary-search the remaining headroom,
+  and poll to watch headroom return, learning roughly when the recipient drained
+  (so, when it was last online) or when its messages expired. Sizes and timing
+  are listed above as visible to the host; this exposes a coarse version of them
+  to a sender too. Against the 64 MiB account ceiling the search was expensive
+  and noisy; against a small device ceiling it is cheap. It is a search, though,
+  and that is deliberate: publishing the ceiling in the device list would have
+  collapsed it to a single probe for any account member, which is why decision 16
+  withholds it. Nothing here reveals payload content, another queue, or who else
+  is in the account.
+- **A 404 on a queue that is gone** — retired by its owner, or belonging to a
+  device that was revoked, since revocation retires that device's queues. The
+  first is a designed signal: a stale sender must learn to fetch a new address
+  (Queues → Rotation). The second is the awkward one — a management-plane fact
+  becomes visible to a party who may hold nothing but a bearer sender credential.
+  *Enables:* little directly; it is listed because it is the one place a
+  management event reaches outside the account, and a consumer reasoning about
+  what a departed peer can infer should know it.
+
+Observable by the **vendor push gateway and Apple**, on iOS only:
+
+- Wake timing, and nothing else — no content, no queue ids, no message counts
+  per queue. See Push architecture.
 
 What an account is, and is not. An account bounds the management plane — a
 device lists, fetches bundles from and revokes only within its own account — plus
@@ -736,6 +761,38 @@ transport plane. This is the SimpleX model working as intended, not a gap in it 
 but PRD 0.6 and earlier described it as though the account also filtered sends,
 which it never did (decision 15).
 
+Sharing an account, for a stack rather than a family. The account model was
+designed for a person's devices or a household, and its first non-family
+consumers — Postiljon and Brygga — run two unequal server-side components as two
+devices in one account. That is a sound choice, and it is what they chose, but
+it costs three things that are easy to miss because each is documented elsewhere
+as a mechanism rather than as a consequence. Stated here so a consumer designing
+a multi-client stack meets them in one place:
+
+- **Revocation reaches every device.** In a flat account any device may revoke
+  any other, and revocation atomically retires every queue the target owns and
+  drops their messages. For a stack where one component receives alarms and
+  another holds every outbound credential, compromise of the credential-holder is
+  one API call away from retiring the queues the alarms arrive on. A `managed`
+  account (decision 12) narrows this to admins, which is one of the few cases
+  where managed mode is clearly the right choice — the components are not people
+  and there is no one to trap.
+- **The storage quota is shared, and shared failure is not the same as shared
+  billing.** Traffic into one component's queues consumes the account ceiling the
+  other's senders draw on, so a flood aimed at one silences the other. Per-device
+  ceilings (decision 13) are the containment for exactly this, and a multi-client
+  account is the deployment that most needs them set.
+- **Every non-revoked device is trusted equally**, and the device list is visible
+  to all of them. This is stated for peers in a family account; it applies just
+  as much to a service account holding two components of unequal privilege.
+  Neither the platform nor the account boundary makes the credential-holder more
+  trusted than its neighbour, or less.
+
+The honest answer to "should two components share an account?" is "yes, with
+those three costs" — and a consumer that cannot accept them should run separate
+accounts, which the transport plane permits (decision 15) at the price of losing
+the shared device list and shared revocation that made one account attractive.
+
 Trust boundary — the account. Sund has no notion of which member may see or talk
 to which: the device list is visible to all members, and reachability between them
 is governed entirely by the consumer's pairing protocol (see Devices → Key
@@ -745,8 +802,9 @@ to read the device list and to use the transport plane. Of the five acts the
 propagation rule calls administrative, three are gated by role — revoking another
 device, minting an invitation, changing a role — while registration is gated by
 holding a valid token, and a storage-ceiling change is not available to a device
-at all, being the operator's (Devices → Storage quota). Consequences a consumer
-must weigh:
+at all, being the operator's — and is also the one whose effect is visible to a
+single device rather than to the account (Devices → Storage quota).
+Consequences a consumer must weigh:
 
 - A compromised or malicious member device can enumerate the account's device
   list and, if the consumer publishes reachable bundles, initiate to any peer
@@ -978,9 +1036,10 @@ stack lock and the second transport-trust mode. Item 12 came in 0.4, item 13 in
     denial-of-service primitive and keeping the write out of band puts it beyond
     every member's reach. But it is not beyond the host's, so by the rule 0.4
     already applied to `sund admin device promote` it must not be silent either:
-    a ceiling change pings the account, `quota_bytes` joins the device list, and
-    `GET /v1/me/quota` lets a device read its own ceiling and stored bytes —
-    which is also the headroom read Postiljon has an open request for. Cost
+    a ceiling change pings the device it affects and `GET /v1/me/quota` lets that
+    device read its own ceiling and stored bytes — which is also the headroom
+    read Postiljon has an open request for. (0.5 also put the ceiling in the
+    device list; decision 16 takes it out again.) Cost
     accepted and recorded: a lower ceiling makes the refusal a cheap oracle for a
     sender probing a recipient's headroom and drain timing (Threat model,
     residual metadata).
@@ -1022,6 +1081,24 @@ stack lock and the second transport-trust mode. Item 12 came in 0.4, item 13 in
     and is what a consumer actually relies on. S7 now asserts the guarantee that
     exists, including positively that a cross-account send succeeds, so the suite
     would catch a future change that quietly introduced tenancy filtering.
+16. A device's storage ceiling is self-scoped. PRD 0.5 put `quota_bytes` in the
+    device list, reasoning by analogy with `role`. The analogy does not hold, and
+    this corrects it: a *role* is authority over other devices, so the devices it
+    is held over must see who holds it — that is what makes a managed account
+    non-covert. A *ceiling* is a constraint on one device's own storage. It
+    confers nothing over anyone, so no peer needs it to protect itself; ceilings
+    are operator-written, so no peer gains a remedy from seeing one; and the
+    accountability that publishing was meant to buy — a capped device knowing it
+    was capped — is delivered entirely by `GET /v1/me/quota`. What publishing did
+    buy was a capability: a member who reads a peer's ceiling turns the
+    refused-send binary search into a single probe. So the ceiling leaves the
+    device list, a ceiling change pings only the device it affects, and
+    `/v1/me/quota` stays self-scoped — it may carry the account ceiling, a
+    constant that binds everyone equally, and never account stored bytes.
+    Generalised, the rule this follows: publish what a party needs to hold power
+    to account, withhold what only makes it easier to act on someone. The
+    restructured residual-metadata list exists to make that judgement visible per
+    item rather than buried in prose.
 
 Open decisions remaining
 

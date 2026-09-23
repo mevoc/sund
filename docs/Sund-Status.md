@@ -289,10 +289,13 @@ Run both with `make test-all`.
 Not built yet (relative to the PRD / API sketch)
 
 - Per-device storage quota (PRD 0.5, decision 13): `devices.quota_bytes`,
-  `sund admin device quota`, `GET /v1/me/quota`, `quota_bytes` in the device-list
-  response, a ping on every ceiling change, and the second ceiling in the append
-  path. The 507 body must also stop naming the account level (it currently reads
-  "account storage quota exceeded"), since a sender must not learn which ceiling
+  `sund admin device quota`, `GET /v1/me/quota` (self-scoped — the caller's own
+  ceiling and stored bytes, never a peer's and never account usage), a ping to
+  the capped device on a ceiling change, and the second ceiling in the append
+  path. `quota_bytes` is deliberately **not** in the device-list response
+  (PRD 0.8, decision 16). The 507 body must also stop naming the account level
+  (it currently reads "account storage quota exceeded"), since a sender must not
+  learn which ceiling
   tripped. The concurrency caveat below applies per-device exactly as it does
   per-account. The enforcement query in `internal/store/queue.go` already joins
   queues → devices → accounts and sums per account; the device level is the same

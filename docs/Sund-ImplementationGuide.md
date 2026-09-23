@@ -1,7 +1,12 @@
 Sund — Implementation Guide
 
-Status: v0.5 (Draft) — companion to Sund-PRD.md
+Status: v0.6 (Draft) — companion to Sund-PRD.md
 
+> New in 0.6: PRD 0.8's decision 16 — a device's storage ceiling is read by the
+> device it caps and by nobody else. `quota_bytes` leaves the device list, a
+> ceiling change pings only the affected device, and `GET /v1/me/quota` stays
+> self-scoped.
+>
 > New in 0.5: scenario S7 rewritten for PRD 0.7's decision 15 — the management
 > plane is account-scoped, the transport plane is not, and the cross-account send
 > is now asserted positively rather than described. Implemented as
@@ -143,8 +148,8 @@ Management plane — requests signed with the device's Ed25519 identity key
 (headers: device id, timestamp, nonce, signature over method+path+body):
 
     POST /v1/devices/register        enroll with one-time token (unsigned + token)
-    GET  /v1/devices                 list account devices (incl. role, quota)
-    GET  /v1/me/quota                own ceiling + stored bytes (PRD 0.5)
+    GET  /v1/devices                 list account devices (incl. role)
+    GET  /v1/me/quota                own ceiling + stored bytes, self-scoped
     POST /v1/devices/{id}/revoke     revoke a device        [admin; always self]
     POST /v1/devices/{id}/role       set a device's role    [admin; managed only]
     PUT  /v1/me/bundle               publish opaque key bundle (size-capped)
@@ -173,8 +178,11 @@ below. Three things sit beside the check:
   demotion at a time. The mode itself has no endpoint at all.
 
 Every administrative act — register, revoke, role change, invitation mint, and
-a storage-ceiling change — pings every device in the account except the one that
-performed it: not only the admins, and never silently. The two acts the operator
+a storage-ceiling change — pings the devices that can observe its effect: for the
+first four that is every device in the account except the one that performed it,
+not only the admins and never silently; for a ceiling change it is the single
+device being capped, which is the only device that can read the result
+(PRD 0.8, decision 16). The two acts the operator
 performs rather than a device, `sund admin device promote` and
 `sund admin device quota`, have no actor to exclude and so ping *every* device
 (PRD → Devices). Two consequences a client implementer needs. A
@@ -424,9 +432,10 @@ network, no disk beyond in-memory SQLite. Covers the invariants testable in isol
 - the 507 body is byte-identical whichever ceiling tripped, so a sender cannot
   tell a device-level refusal from an account-level one (today's text, "account
   storage quota exceeded", is wrong for the device level and must change)
-- a ceiling change pings every device in the account, `quota_bytes` appears in
-  the device list, and `GET /v1/me/quota` returns the caller's own ceiling and
-  stored bytes — a device can always tell being capped from being full
+- a ceiling change pings the capped device and no other; `quota_bytes` does
+  **not** appear in the device-list response, so a member cannot read a peer's
+  ceiling; and `GET /v1/me/quota` returns the caller's own ceiling and stored
+  bytes — a device can always tell being capped from being full
 - the two leaks a later convenience would reintroduce, asserted rather than
   assumed: `/v1/me/quota` is self-scoped and its response carries no
   account-level figure (an account-wide stored-bytes number readable by every
@@ -525,7 +534,8 @@ S10 Quota bulkhead — two devices in one account, each given its own ceiling we
    device's queues until sends to it are refused; assert the second device still
    receives, the account ceiling was never reached, and draining the first frees
    only its own headroom. Assert the refusal body does not say which ceiling
-   tripped, that the ceiling change pinged both devices, and that
+   tripped, that the ceiling change pinged only the device it capped, that the
+   device list carries no ceiling for either device, and that
    `GET /v1/me/quota` on the capped device reports the ceiling it was given.
    Then clear that ceiling (0) and assert the device can again consume up to the
    account cap — 0.4 behaviour, unchanged underneath.

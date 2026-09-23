@@ -117,8 +117,12 @@ CI and repo housekeeping
     Two per-commit jobs: `go test ./...` (unit suite) and a Python job that
     builds the binary then runs `pytest` (system suite) — both per the PRD's
     per-commit test strategy (decision 9). Only the Go unit suite additionally
-    runs as the local pre-commit hook (a plain script, no hook framework), since
-    it alone is guaranteed fast enough (< 5 s) not to slow down commits.
+    runs as the local pre-commit hook (`.githooks/pre-commit`, a plain shell
+    script, no hook framework), since it alone is guaranteed fast enough (< 5 s)
+    not to slow down commits. Git does not install hooks from a clone, so it is
+    opt-in per working copy: `make hooks` points `core.hooksPath` at the
+    directory. The hook is a convenience, never the gate — CI runs both suites on
+    every push regardless, and `git commit --no-verify` skips it.
 
     Done: the repository is hosted publicly at github.com/mevoc/sund (MIT), so
     its first consumer — family-beacon, itself public — can pull both the source
@@ -519,7 +523,8 @@ S10 Quota bulkhead — two devices in one account, each given its own ceiling we
    account cap — 0.4 behaviour, unchanged underneath.
 
 CI runs both suites on every commit; the unit suite additionally runs as a
-pre-commit hook. Exceeding the time targets above is treated as a regression.
+pre-commit hook, installed per working copy with `make hooks` (Toolchain).
+Exceeding the time targets above is treated as a regression.
 
 Consumer contract tests (planned)
 

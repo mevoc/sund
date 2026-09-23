@@ -134,8 +134,12 @@ CI). Those are tracked in `Sund-Status.md` → "Not built yet".
 - Actual: no hook script in the repo, no `core.hooksPath`, nothing in `Makefile`.
   Both suites run in GitHub Actions on every push and PR (`.github/workflows/`).
 - Why: never set up; CI covers the gate.
-- Status: open. Either add the script (and a `make hooks` target to install it) or
-  remove the sentence from the guide.
+- Status: closed 2026-09-23 by adding the script. `.githooks/pre-commit` runs
+  `go test ./...` and `make hooks` points `core.hooksPath` at it; the guide now
+  names both and says the hook is opt-in per working copy, since git installs no
+  hooks from a clone. Adding it rather than deleting the sentence because the
+  guide budgets the unit suite at under five seconds *because* of the hook — the
+  intent was real and only the implementation was missing. CI remains the gate.
 
 ## 2026-09-20 — Sends into another account's queue are not refused
 

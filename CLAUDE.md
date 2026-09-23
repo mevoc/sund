@@ -54,10 +54,16 @@ intent.
 
 ## Docs
 
-- `docs/Sund-PRD.md` — **current (v0.6).** Two-plane architecture, pseudonymous
+- `docs/Sund-PRD.md` — **current (v0.7).** Two-plane architecture, pseudonymous
   queues, device list/revocation/key bundles, push architecture (UnifiedPush/ntfy
   on Android; vendor APNS gateway on iOS — pluggable provider interface),
-  fingerprint-pinned server address, one-binary stack requirement. New in 0.6:
+  fingerprint-pinned server address, one-binary stack requirement. New in 0.7:
+  multi-tenancy scoped to what it is (decision 15). The management plane is
+  account-isolated; the **transport plane consults no account in either
+  direction**, so a cross-account send succeeds, a sender may hold no account at
+  all, and a cross-account read fails only for want of the recipient key. A queue
+  is protected by its keys, not its account. Three sentences said otherwise and
+  were wrong — the code was always right. From 0.6:
   the per-message delivery status is **removed** (decision 14) — an ack deletes
   the row, so the column only ever held one value and described no behaviour;
   Messages now states the model positively (stored until acked; no read receipt;
@@ -92,7 +98,7 @@ intent.
   ARCHITECTURE.md updated to match). Remaining open: iOS gateway operations,
   signed administrative statements. (Blob storage and queue rotation are
   resolved — see the PRD's "Resolved since first listed as open".)
-- `docs/Sund-ImplementationGuide.md` — companion to PRD 0.6: components, API
+- `docs/Sund-ImplementationGuide.md` — companion to PRD 0.7: components, API
   sketch (two planes), walkthroughs for first-device onboarding and second-device
   invitation (SimpleX-style QR bootstrap), each step mapped to Family Beacon.
   Also the test strategy: unit + system suites (both per-commit), the beaconsim

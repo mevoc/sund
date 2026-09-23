@@ -2,11 +2,21 @@ Sund
 
 «A blind strait between your devices.»
 
-Status: PRD v0.6 (Draft) — supersedes PRD 0.5
+Status: PRD v0.7 (Draft) — supersedes PRD 0.6
 
 > Working name: **Sund** (Swedish: a strait between islands — the channel between
 > skerries; also "sound, healthy"). The kernel extracted from Skerry
-> (`../skerry`). This revision removes one thing: the per-message delivery status
+> (`../skerry`). This revision corrects one thing rather than adding anything:
+> three sentences claimed an isolation the design does not provide and cannot.
+> Sund's transport plane authenticates a send by the per-queue sender key alone,
+> so a send succeeds regardless of which account owns the queue — or whether the
+> sender has an account at all. "Accounts are fully isolated", "no cross-account
+> messaging" and scenario S7 said otherwise. Decision 15 scopes them to what is
+> true: the *management* plane is account-isolated, and so is the recipient side
+> of a queue; the transport plane is authenticated by bearer credential, not by
+> tenancy. No behaviour changes — the code was right and the spec was not.
+>
+> PRD 0.6 removed, for context: the per-message delivery status
 > (decision 14), which described no behaviour — an ack deletes the row, so the
 > column only ever held one value. The Messages section now says positively what
 > the model is (stored until acked; no read receipt) instead of promising a
@@ -99,7 +109,11 @@ Principles
 - Infrastructure, not application. All business logic lives in clients. The one
   class of rule Sund does enforce is authorization over its *own* operations, for
   the reason set out in Threat model → Trust boundary.
-- Multi-tenant by design. Accounts are fully isolated.
+- Multi-tenant by design. The management plane is account-isolated: a device
+  sees only its own account's devices, bundles and invitations, and can revoke
+  only within it. The transport plane is not a tenancy boundary at all — it is
+  authenticated by per-queue keys, which is the point of it (see Queues, and
+  Threat model → What an account is and is not).
 - Self-host first. One small static binary, one database file. Install. Deploy.
   Backup. Upgrade. (The Holm bar.)
 - Adopt, don't build. Where sound self-hostable components exist (UnifiedPush/ntfy
@@ -113,7 +127,9 @@ Principles
 Scope — V1
 
 Accounts
-- Multi-tenant isolation, per-account quotas, root-admin provisioning.
+- Multi-tenant isolation **on the management plane**, per-account quotas,
+  root-admin provisioning. The transport plane is not account-scoped; see
+  Threat model → What an account is, and is not.
 - Quotas are attributed to the queue owner's account (the recipient side — the
   side the server knows). Senders stay pseudonymous without breaking accounting.
 - Storage quota has two levels, both recipient-side and both optional: a ceiling
@@ -408,7 +424,23 @@ Queues
   would force the server to learn the very who-talks-to-whom graph it refuses to
   store. Caveat: retire drops the queue's undelivered messages, so a rotating
   owner drains the old queue before retiring it.
-- V1 scope: queues connect devices within the same account.
+- A sender ID is a bearer credential, and the server treats it as one. A send is
+  authorized by the per-queue sender key and nothing else: the server does not
+  ask, and cannot ask, which account the sender belongs to, because no column
+  links a sender to a device or an account. Consequences worth stating plainly:
+    - Until a queue is bound, whoever first presents its sender ID with a key
+      claims it. Binding is what turns the bearer claim into a fixed
+      counterparty, which is why the QR ceremony and the first message through a
+      new queue matter.
+    - After binding, only the holder of the bound key can send. A leaked sender
+      ID buys nothing on a bound queue.
+    - Neither check involves an account. A sender may hold no account on the
+      server, and a send into a queue owned by a different account succeeds.
+- V1 scope: Sund offers no cross-account *addressing, routing or discovery* —
+  there is no way to name another account, enumerate it, or reach a device
+  through it, and the management plane is isolated. What it does not do is
+  *refuse a send* on account grounds, which is a different claim and was
+  previously stated as though it were the same one (decision 15).
 
 Messages
 - Send (by sender ID), receive/ack (by recipient ID), per-message TTL. Queues
@@ -656,7 +688,8 @@ Explicitly NOT hidden — residual metadata a host can observe:
   account ceiling alone.
 
   That makes the refusal a coarse oracle, new in 0.5 and the honest price of the
-  feature. A sender holding a valid sender ID can send minimum-size payloads to
+  feature. A sender holding a queue's live send credential — its sender ID, and
+  on a bound queue the bound key — can send minimum-size payloads to
   binary-search the remaining headroom, and poll to watch headroom return —
   learning roughly when the recipient drained (so, when it was last online) or
   when its messages expired. Sizes and timing are already listed above as visible
@@ -671,9 +704,37 @@ Explicitly NOT hidden — residual metadata a host can observe:
   knowingly. It reveals no payload content, no other queue, and
   nothing about who else is in the account — and the prober need not be an
   account member at all, since a send authenticates with the per-queue sender key
-  alone (`docs/deviations.md`, 2026-09-20, open).
+  alone (`docs/deviations.md`, 2026-09-20, closed in 0.7 by decision 15).
 - On iOS, wake timing (though nothing else) is additionally visible to the vendor
   push gateway and to Apple — see Push architecture.
+
+What an account is, and is not. An account bounds the management plane — a
+device lists, fetches bundles from and revokes only within its own account — plus
+queue *ownership*, and therefore quota attribution and wake-up, plus billing.
+It bounds nothing on the transport plane, in **either** direction. Neither a send
+nor a receive consults an account *to authorize it*: `recv`/`ack`/`retire` are
+authorized by the per-queue recipient key and a send by the per-queue sender key,
+and no column anywhere links either to a device or an account. The one place a
+send touches account state at all is the recipient-side quota check, which is
+ownership again and is why a refusal can reach a sender who has no account of
+their own — see the refused-send bullet under residual metadata. The server has
+no tenancy fact to test for authorization, and could only acquire one by
+recording the sender↔account link the blindness audit exists to prove absent.
+
+This matters for how the guarantee is stated. It is not that cross-account reads
+fail and cross-account sends succeed — a cross-account *read* fails for the same
+reason a same-account read by the wrong device fails: the caller does not hold
+the queue's recipient key. **A queue is protected by its keys, not by its
+account.** What protects it is that the recipient minted both ids, that the
+sender id went to one peer out of band, that the first send binds a key and a
+second key is then refused, and that the owner can retire the queue at will.
+
+So the honest statement of multi-tenancy is: accounts are isolated on the
+management plane, and a queue is reachable by whoever holds its credentials.
+A consumer must not treat the account as a spam or abuse boundary on the
+transport plane. This is the SimpleX model working as intended, not a gap in it —
+but PRD 0.6 and earlier described it as though the account also filtered sends,
+which it never did (decision 15).
 
 Trust boundary — the account. Sund has no notion of which member may see or talk
 to which: the device list is visible to all members, and reachability between them
@@ -789,7 +850,12 @@ Non-goals
 - No blob/object storage in V1. First candidate extension, deferred until a
   consumer demonstrates need; if added, a separate optional module with the same
   blindness guarantee.
-- No cross-account or federated messaging in V1.
+- No cross-account or federated *addressing* in V1: no directory, no routing
+  between accounts, no way to reach a device except through a queue whose sender
+  ID you were given. This is not the same as refusing a send that arrives with a
+  valid sender credential from outside the account — see Queues and decision 15
+  for why the transport plane cannot make that distinction without storing the
+  link it exists not to store.
 - No chat product: no UI, no contacts, no groups.
 - No content moderation — structurally impossible, stated openly.
 
@@ -939,6 +1005,23 @@ stack lock and the second transport-trust mode. Item 12 came in 0.4, item 13 in
     binary, and it is one-way: an older binary's append names `status` in its
     INSERT, so a rollback across this change fails every send. Since the column
     never appeared in a response body, no client contract changes.
+15. Multi-tenancy scoped to what it is. Three statements — Principles ("Accounts
+    are fully isolated"), the V1 non-goal ("No cross-account or federated
+    messaging") and the guide's scenario S7 ("cross-account queue reads, sends,
+    bundle fetches and device-list reads all fail") — asserted that a send from
+    another account is refused. It is not, and cannot be: `handleSend` resolves
+    the queue by sender ID and verifies the per-queue sender key, and no column
+    anywhere links a sender to a device or an account, so there is no tenancy
+    fact to test. Enforcing it would mean storing that link, contradicting the
+    Architecture Principle and the S8 audit, and buying nothing — a queue is
+    already protected by its sender ID being secret and by first-send binding.
+    The code was right and the spec was wrong, so the spec moves: the management
+    plane and the recipient side of a queue are account-isolated, the transport
+    plane is authorized by bearer credential, and the non-goal is restated as the
+    absence of cross-account *addressing, routing and discovery*, which is true
+    and is what a consumer actually relies on. S7 now asserts the guarantee that
+    exists, including positively that a cross-account send succeeds, so the suite
+    would catch a future change that quietly introduced tenancy filtering.
 
 Open decisions remaining
 

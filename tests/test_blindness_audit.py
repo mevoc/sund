@@ -67,6 +67,16 @@ def test_blindness_audit(sund_server, new_account, push_sink):
             f"messages must not reference any device, found {message_cols}"
         )
 
+        # An account column would record the same forbidden link one level up:
+        # sender -> account is as much a who-talks-to-whom edge as sender ->
+        # device, and tenancy filtering on the transport plane could only be
+        # built on one (PRD 0.7, decision 15).
+        for table, cols in (("queues", queue_cols), ("messages", message_cols)):
+            account_cols = [c for c in cols if "account" in c]
+            assert not account_cols, (
+                f"{table} must not reference an account, found {account_cols}"
+            )
+
         # --- The who-talks-to-whom graph is not recorded ---
         # B sends into q_a (owned by A): B's device id must appear nowhere in that
         # queue's row. A sends into q_b (owned by B): A's id must be absent there.

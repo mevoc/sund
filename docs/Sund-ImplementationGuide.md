@@ -1,6 +1,11 @@
 Sund — Implementation Guide
 
-Status: v0.4 (Draft) — companion to Sund-PRD.md
+Status: v0.5 (Draft) — companion to Sund-PRD.md
+
+> New in 0.5: scenario S7 rewritten for PRD 0.7's decision 15 — the management
+> plane is account-scoped, the transport plane is not, and the cross-account send
+> is now asserted positively rather than described. Implemented as
+> `tests/test_tenant_isolation.py`.
 
 > New in 0.4: the per-device storage quota of PRD 0.5 (decision 13) — the
 > operator surface, the enforcement rule and the test coverage. Writing a ceiling
@@ -493,12 +498,15 @@ S5c No silent administration — a member device, woken only by the ordinary pin
    name no actor for any of the acts — there is no "X revoked Y" record to find.
 S6 Invitation abuse — reuse a consumed token, use an expired one, use a revoked
    one: all fail closed; no device row is created.
-S7 Tenant isolation — two accounts on one server: cross-account queue reads,
-   sends, bundle fetches and device-list reads all fail. (The "sends" half is
-   contested: see `docs/deviations.md`, 2026-09-20 — as built, a send
-   authenticates with the per-queue sender key alone and no account is
-   consulted. The entry states the two ways to close it; this scenario is
-   written to the spec, which is why it is listed there as open.)
+S7 Tenant isolation — two accounts on one server. The management plane is
+   isolated: cross-account device-list reads, bundle fetches and revokes all
+   fail, and so does reading another account's queue. A cross-account *send*
+   **succeeds**, and the scenario asserts that positively rather than leaving it
+   untested — a send is authorized by the per-queue sender key alone, there is no
+   tenancy fact to check, and a future change that quietly introduced one would
+   be a blindness regression (PRD 0.7, decision 15). The scenario also covers the
+   bearer-credential edges: an unbound queue is claimed by whoever first presents
+   its sender ID with a key, and once bound a second key is refused.
 S8 Blindness audit — the structural test. After every other scenario including
    S10, whose traffic is the bulkiest, open sund.db directly
    and assert: no table or column links a sender device to a queue; every

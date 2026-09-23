@@ -1,7 +1,7 @@
 # Sund — deviations from the PRD and implementation guide
 
-Where the code, the guide or an issue departs from `Sund-PRD.md` (v0.6) or
-`Sund-ImplementationGuide.md` (v0.4), it is recorded here at the time the departure
+Where the code, the guide or an issue departs from `Sund-PRD.md` (v0.7) or
+`Sund-ImplementationGuide.md` (v0.5), it is recorded here at the time the departure
 is made. Open entries are the agenda for the next spec revision; a revision closes
 them by updating `Status`. Format and rules: `~/projects/CLAUDE.md`, *Design flow*.
 
@@ -160,16 +160,27 @@ CI). Those are tracked in `Sund-Status.md` → "Not built yet".
   Sund actually offers is on the management plane and on the recipient side of a queue.
   `Sund-Status.md` → Multi-tenancy ("cross-account reads/sends/revokes fail") reads as
   the spec does and needs the same scoping.
-- Status: open. Surfaced by `../postiljon` PRD v0.3 §7.1 and `../brygga` PRD v0.2
-  BIND-1, which both depend on the current behaviour: Postiljon and Brygga are devices
-  in separate accounts so that neither can revoke the other's queues, and publishers
-  hold a per-queue sender credential while belonging to no account at all. Two ways to
-  close it:
-  (a) scope the PRD non-goal, S7 and `Sund-Status.md` to the management plane and the
-  recipient side, and add a system test that a cross-account *read* fails while a send
-  succeeds — recommended, since it documents what the design already guarantees; or
-  (b) enforce per-account sends, which reintroduces the sender↔account link, contradicts
-  S8, and would force Postiljon and Brygga to share one account. André decides.
+- Status: folded into `Sund-PRD.md` v0.7 and `Sund-ImplementationGuide.md` v0.5
+  (decision 15) — option (a), scoping the spec to what the design guarantees.
+  Principles, the V1 non-goal, the Queues section, `Sund-Status.md` and scenario
+  S7 now distinguish the management plane (account-isolated) from the transport
+  plane (authorized by per-queue bearer credential), and S7 asserts positively
+  that a cross-account send *succeeds*, so a future change that quietly added
+  tenancy filtering would fail the suite. Option (b), enforcing per-account
+  sends, was rejected on its own merits and not on downstream convenience: it
+  requires storing a sender↔account link, which contradicts the Architecture
+  Principle and the S8 audit, and it protects nothing that the sender id's
+  secrecy and first-send binding do not already protect.
+
+  Note on how this entry aged, since it matters for reading the others: when it
+  was written on 2026-09-20 it recorded that Postiljon and Brygga *depended* on
+  cross-account sends, being in separate accounts. That stopped being true on
+  2026-09-21, when both moved into one account (`../brygga` BIND-1: "Brygga no
+  longer depends on the answer"; `../postiljon` §7.1). So the reason to fix this
+  was never downstream urgency — by the time it was fixed there was none — but
+  that three sentences in the spec asserted an isolation the design cannot
+  provide. Tracked as `mevoc/sund` #3, whose other half — documenting what one
+  account means for two co-located clients — remains open.
 
 ## 2026-09-21 — `messages.status` is stored but never changes
 

@@ -183,7 +183,8 @@ CI). Those are tracked in `Sund-Status.md` → "Not built yet".
   positively what the model is instead (stored until acked, then the row is
   deleted; no read receipt); the column is removed from the schema, from the
   `Message` struct and from the append and drain queries, with a migration that
-  drops it from databases written by an older binary. It never reached the wire
+  drops it from databases written by an older binary — destructive and one-way,
+  since an older binary's append still names `status`. It never reached the wire
   — `messageView` carries id, payload, received_at and expires — so no client
   contract changed. The alternative, defining real statuses, was rejected because
   it means keeping rows past ack, against "it stores briefly (TTL)".

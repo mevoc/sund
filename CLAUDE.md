@@ -60,8 +60,10 @@ intent.
   fingerprint-pinned server address, one-binary stack requirement. New in 0.6:
   the per-message delivery status is **removed** (decision 14) — an ack deletes
   the row, so the column only ever held one value and described no behaviour;
-  Messages now states the model positively (stored until acked, no read receipt,
-  a sender learns nothing). From 0.5:
+  Messages now states the model positively (stored until acked; no read receipt;
+  no delivery or read signal to the sender — which is narrower than "a sender
+  learns nothing", since a send still fails closed on a retired or full queue).
+  The migration is destructive and one-way. From 0.5:
   a per-device storage ceiling beside the per-account one (decision 13) — a
   bulkhead so one device's backlog cannot exhaust the account's headroom. Needs
   no new linkage (the quota check already resolves queue → owner device).

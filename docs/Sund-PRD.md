@@ -415,8 +415,13 @@ Messages
   survive offline receivers; expired messages are deleted unread. There is no
   per-message delivery status and no read receipt: a message is stored until it
   is acked, at which point its row is deleted, so "delivered" is not a state the
-  server keeps. A recipient learns what arrived by draining; a sender learns
-  nothing, which is the design rather than a gap (decision 14).
+  server keeps. A recipient learns what arrived by draining. Sund gives a sender
+  no delivery or read signal at all — that is the design rather than a gap
+  (decision 14) — which is narrower than saying a sender learns nothing: a send
+  can still fail closed against a retired queue (404) or a full one (507), and
+  the latter is a coarse oracle on the recipient's storage and drain timing. What
+  a sender can infer anyway is in Threat model → residual metadata; what Sund
+  deliberately does not tell it is delivery.
 - Payloads are opaque ciphertext, bounded by both quota levels (Accounts).
 
 Push wake-up
@@ -918,16 +923,22 @@ stack lock and the second transport-trust mode. Item 12 came in 0.4, item 13 in
     by nothing: an ack deletes the row and an expired message is purged, so
     there was never a second state to be in. It is dropped — from the schema,
     from the `Message` struct and from the append and drain queries — rather than
-    given real statuses, because real statuses mean keeping rows past ack, which
-    contradicts "it stores briefly (TTL)" in Principles. The Messages section now
-    states the model positively instead of promising a feature: a message is
-    stored until acked, then gone; there is no read receipt; a recipient learns
-    what arrived by draining, and a sender learns nothing. That last part is
-    worth keeping explicit — a sender learning when its message was read would be
-    a per-message timing signal about the recipient, which is the kind of thing
-    the transport plane exists not to produce. Migration drops the column from
-    databases written by an older binary; since it never appeared in a response
-    body, no client contract changes.
+    given real statuses. The load-bearing reason is retention: a status worth
+    reading has to outlive the ack, and keeping rows past ack contradicts "it
+    stores briefly (TTL)" in Principles. It would also turn a timing observation
+    the host can already make live into a durable per-message record of when a
+    recipient collected what — the difference between seeing traffic and keeping
+    a history of it. A second reason applies only if such a status were ever
+    exposed to senders, which this column never was: a read receipt is a
+    per-message timing signal about the recipient, and the transport plane exists
+    not to produce those. The Messages section now states the model positively
+    instead of promising a feature: stored until acked, then gone, no read
+    receipt, and no delivery signal to the sender — stated there with the
+    failure modes a sender *can* still observe, so the claim stays as narrow as
+    it is true. Migration drops the column from databases written by an older
+    binary, and it is one-way: an older binary's append names `status` in its
+    INSERT, so a rollback across this change fails every send. Since the column
+    never appeared in a response body, no client contract changes.
 
 Open decisions remaining
 

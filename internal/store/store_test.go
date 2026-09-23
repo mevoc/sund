@@ -357,6 +357,21 @@ func TestMigrateDropsMessagesStatus(t *testing.T) {
 	if err != nil || !has {
 		t.Fatalf("status column not restored for the test: has=%v err=%v", has, err)
 	}
+
+	// The drop must carry stored ciphertext across, in order. An empty table
+	// would prove only that the ALTER runs.
+	ctx := context.Background()
+	dev := seedDevice(t, st)
+	q, err := st.CreateQueue(ctx, dev.ID, randKey(t))
+	if err != nil {
+		t.Fatalf("CreateQueue: %v", err)
+	}
+	want := []string{"first", "second", "third"}
+	for _, w := range want {
+		if _, err := st.AppendMessage(ctx, q.RecipientID, []byte(w), time.Minute); err != nil {
+			t.Fatalf("AppendMessage(%q): %v", w, err)
+		}
+	}
 	st.Close()
 
 	// Reopening runs migrate, which must drop it.
@@ -371,6 +386,20 @@ func TestMigrateDropsMessagesStatus(t *testing.T) {
 		}
 		if has {
 			t.Fatalf("reopen %d: messages.status still present", i)
+		}
+
+		msgs, err := st.DrainMessages(ctx, q.RecipientID)
+		if err != nil {
+			t.Fatalf("DrainMessages after reopen %d: %v", i, err)
+		}
+		if len(msgs) != len(want) {
+			t.Fatalf("reopen %d: got %d messages, want %d", i, len(msgs), len(want))
+		}
+		for j, w := range want {
+			if string(msgs[j].Payload) != w {
+				t.Fatalf("reopen %d: message %d is %q, want %q (payload or seq order lost in the drop)",
+					i, j, msgs[j].Payload, w)
+			}
 		}
 		st.Close()
 	}

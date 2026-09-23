@@ -54,10 +54,14 @@ intent.
 
 ## Docs
 
-- `docs/Sund-PRD.md` — **current (v0.5).** Two-plane architecture, pseudonymous
+- `docs/Sund-PRD.md` — **current (v0.6).** Two-plane architecture, pseudonymous
   queues, device list/revocation/key bundles, push architecture (UnifiedPush/ntfy
   on Android; vendor APNS gateway on iOS — pluggable provider interface),
-  fingerprint-pinned server address, one-binary stack requirement. New in 0.5:
+  fingerprint-pinned server address, one-binary stack requirement. New in 0.6:
+  the per-message delivery status is **removed** (decision 14) — an ack deletes
+  the row, so the column only ever held one value and described no behaviour;
+  Messages now states the model positively (stored until acked, no read receipt,
+  a sender learns nothing). From 0.5:
   a per-device storage ceiling beside the per-account one (decision 13) — a
   bulkhead so one device's backlog cannot exhaust the account's headroom. Needs
   no new linkage (the quota check already resolves queue → owner device).
@@ -86,7 +90,7 @@ intent.
   ARCHITECTURE.md updated to match). Remaining open: iOS gateway operations,
   signed administrative statements. (Blob storage and queue rotation are
   resolved — see the PRD's "Resolved since first listed as open".)
-- `docs/Sund-ImplementationGuide.md` — companion to PRD 0.5: components, API
+- `docs/Sund-ImplementationGuide.md` — companion to PRD 0.6: components, API
   sketch (two planes), walkthroughs for first-device onboarding and second-device
   invitation (SimpleX-style QR bootstrap), each step mapped to Family Beacon.
   Also the test strategy: unit + system suites (both per-commit), the beaconsim

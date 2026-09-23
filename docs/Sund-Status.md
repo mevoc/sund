@@ -63,7 +63,7 @@ Data model (actual SQLite schema)
     queues       recipient_id (pk), sender_id, owner_device, recipient_key,
                  sender_key (null until bound), created, retired
     messages     seq (autoincrement), id, queue_id (= a queue's recipient_id),
-                 payload (ciphertext), received_at, expires, status
+                 payload (ciphertext), received_at, expires
 
 Notes:
 - There is deliberately no column linking a sender device to a queue.

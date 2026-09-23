@@ -337,3 +337,63 @@ func TestCrossAccountIsolation(t *testing.T) {
 		t.Fatalf("account B sees %d devices, want only its own 1", len(devsB))
 	}
 }
+
+// A database written by a pre-0.6 binary still carries messages.status. Opening
+// it drops the column, and the drop is idempotent across restarts
+// (docs/deviations.md, 2026-09-21 — messages.status is stored but never changes).
+func TestMigrateDropsMessagesStatus(t *testing.T) {
+	path := t.TempDir() + "/old.db"
+
+	// Reconstruct the old shape: open once, then add the column back as an older
+	// binary would have left it.
+	st, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := ensureColumn(st.db, "messages", "status", "TEXT NOT NULL DEFAULT 'stored'"); err != nil {
+		t.Fatalf("re-add status: %v", err)
+	}
+	has, err := hasColumn(st.db, "messages", "status")
+	if err != nil || !has {
+		t.Fatalf("status column not restored for the test: has=%v err=%v", has, err)
+	}
+	st.Close()
+
+	// Reopening runs migrate, which must drop it.
+	for i := range 2 {
+		st, err := Open(path)
+		if err != nil {
+			t.Fatalf("reopen %d: %v", i, err)
+		}
+		has, err := hasColumn(st.db, "messages", "status")
+		if err != nil {
+			t.Fatalf("hasColumn after reopen %d: %v", i, err)
+		}
+		if has {
+			t.Fatalf("reopen %d: messages.status still present", i)
+		}
+		st.Close()
+	}
+}
+
+// A message survives the round trip without the dropped column.
+func TestAppendDrainAfterStatusDrop(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	dev := seedDevice(t, st)
+
+	q, err := st.CreateQueue(ctx, dev.ID, randKey(t))
+	if err != nil {
+		t.Fatalf("CreateQueue: %v", err)
+	}
+	if _, err := st.AppendMessage(ctx, q.RecipientID, []byte("ciphertext"), time.Minute); err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+	msgs, err := st.DrainMessages(ctx, q.RecipientID)
+	if err != nil {
+		t.Fatalf("DrainMessages: %v", err)
+	}
+	if len(msgs) != 1 || string(msgs[0].Payload) != "ciphertext" {
+		t.Fatalf("got %d messages, want 1 with the stored payload", len(msgs))
+	}
+}

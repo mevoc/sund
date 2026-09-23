@@ -1,0 +1,18 @@
+#!/bin/sh
+# Sund pre-commit hook: run the Go unit suite before a commit is recorded.
+#
+# The unit suite alone, never the system suite: the guide budgets it at under
+# five seconds (Testing), which is what makes it tolerable here, while the
+# system suite compiles the binary and spawns it per test. CI runs both on every
+# push — this hook only catches the fast failures early.
+#
+# Install with `make hooks`. Skip a single commit with `git commit --no-verify`.
+set -e
+
+if ! command -v go >/dev/null 2>&1; then
+	echo "pre-commit: go not on PATH, skipping the unit suite" >&2
+	exit 0
+fi
+
+echo "pre-commit: go test ./..."
+go test ./...

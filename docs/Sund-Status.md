@@ -1,7 +1,8 @@
 Sund — Implementation Status
 
-Status: v0.1 (snapshot, 2026-07-20; "Not built yet" refreshed against PRD 0.4 on
-2026-09-21) — describes the code, not the plan
+Status: v0.1 (snapshot of the code at the storage-quota commit, 2026-07-20;
+"Not built yet" and the schema block refreshed against PRD 0.5 on 2026-09-21)
+— describes the code, not the plan
 
 This is a snapshot of what the Sund binary actually does as of the storage-quota
 commit, written for the people who build on it — chiefly family-beacon
@@ -23,7 +24,8 @@ At a glance
   real compiled binary with real crypto. ~49 Go cases, ~29 system tests, both
   per-commit. Includes the blindness audit (S8) and operator-survival (S9).
 - Not yet built: the account administration model of PRD 0.4 (administration
-  modes, device roles), iOS push provider, metrics. TLS/fingerprint pinning is
+  modes, device roles), the per-device storage quota of PRD 0.5, iOS push
+  provider, metrics. TLS/fingerprint pinning is
   implemented as an opt-in mode (`serve --tls-dir`); making it the default is a
   follow-up. See "Not built yet".
 
@@ -55,7 +57,9 @@ Data model (actual SQLite schema)
     accounts     id, created, quota (class label), status, quota_bytes
     devices      id, account_id, public_key, push_endpoint, capabilities,
                  created, last_seen, revoked
-    invitations  token_hash, account_id, created, expires, consumed
+    bundles      device_id (pk), blob (opaque, size-capped), updated
+    invitations  token_hash (pk), id, account_id, created, expires, consumed,
+                 revoked
     queues       recipient_id (pk), sender_id, owner_device, recipient_key,
                  sender_key (null until bound), created, retired
     messages     seq (autoincrement), id, queue_id (= a queue's recipient_id),
@@ -149,7 +153,10 @@ Behavior details a consumer should know
   revoked.
 - Quota: per account, counted on the owner (recipient) side. A send that would
   exceed `quota_bytes` is refused with 507; space frees as messages are acked or
-  expire. Set via `sund admin account create --quota-bytes N` or a named class
+  expire. **The cap is account-wide only** — there is no per-device ceiling, so
+  one device's backlog consumes headroom its peers share. PRD 0.5 adds a second,
+  per-device level; none of it is implemented. Set via
+  `sund admin account create --quota-bytes N` or a named class
   (standard = 64 MiB, large = 1 GiB). 0 = unlimited.
 - Invitations: single-use, default 15-minute TTL, atomically consumed by the
   first registration. Minting returns a non-secret invitation id alongside the
@@ -266,6 +273,18 @@ Run both with `make test-all`.
 
 Not built yet (relative to the PRD / API sketch)
 
+- Per-device storage quota (PRD 0.5, decision 13): `devices.quota_bytes`,
+  `sund admin device quota`, `GET /v1/me/quota`, `quota_bytes` in the device-list
+  response, a ping on every ceiling change, and the second ceiling in the append
+  path. The 507 body must also stop naming the account level (it currently reads
+  "account storage quota exceeded"), since a sender must not learn which ceiling
+  tripped. The concurrency caveat below applies per-device exactly as it does
+  per-account. The enforcement query in `internal/store/queue.go` already joins
+  queues → devices → accounts and sums per account; the device level is the same
+  query filtered on `q.owner_device` instead of `d.account_id`. So: a column, a
+  CLI command, one self-scoped read endpoint, a new ping trigger and a second
+  bound on an existing check — no new linkage, the join already being there.
+  Today the account cap is the only ceiling.
 - Account administration (PRD 0.4, decision 12): `accounts.admin_mode`,
   `devices.role`, `invitations.grants_role`, `POST /v1/devices/{id}/role`, the
   admin-only checks on revoke and invitation minting, the last-admin invariant,

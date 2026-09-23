@@ -1,7 +1,7 @@
 # Sund — deviations from the PRD and implementation guide
 
-Where the code, the guide or an issue departs from `Sund-PRD.md` (v0.3) or
-`Sund-ImplementationGuide.md` (v0.2), it is recorded here at the time the departure
+Where the code, the guide or an issue departs from `Sund-PRD.md` (v0.5) or
+`Sund-ImplementationGuide.md` (v0.4), it is recorded here at the time the departure
 is made. Open entries are the agenda for the next spec revision; a revision closes
 them by updating `Status`. Format and rules: `~/projects/CLAUDE.md`, *Design flow*.
 
@@ -80,10 +80,18 @@ CI). Those are tracked in `Sund-Status.md` → "Not built yet".
   revocable invitations, which the PRD's table row forgot; `seq` gives a stable
   delivery order at second-precision timestamps; `expires` is what the purge query
   needs.
-- Status: open. Update the PRD table so the "auditable in the schema" promise stays
-  literally true. Related: `messages.status` exists but is never updated from
-  `'stored'` (ack deletes the row), so the PRD's "delivery status" is not a feature;
-  either drop the phrase or define what statuses exist.
+- Status: folded into `Sund-PRD.md` v0.5 — the Data model table now lists
+  `accounts.quota_bytes`, `invitations.id`/`revoked` and `messages.seq`/`id`/
+  `expires`, with a note on what each is for. The "auditable in the schema"
+  promise is restated one-directionally rather than claimed outright: every
+  column the code has is listed, while four listed columns are design intent not
+  yet built (0.4's `admin_mode`, `role`, `grants_role`; 0.5's
+  `devices.quota_bytes`), tracked in `Sund-Status.md` → "Not built yet". The same
+  revision fixed drift in the other direction: `Sund-Status.md`'s own "actual
+  SQLite schema" block had omitted `invitations.id`/`revoked` and the `bundles`
+  table entirely. The `messages.status` half of this entry — the column exists
+  but only ever holds `'stored'` — is a product question rather than a
+  documentation fix, and is carried on as its own entry dated 2026-09-21.
 
 ## 2026-09-18 — Expired messages are purged lazily, on the next drain
 
@@ -109,7 +117,14 @@ CI). Those are tracked in `Sund-Status.md` → "Not built yet".
   device may revoke another") and the Architecture Principle.
 - Why: a server-enforced revoke permission would be application policy, which the
   PRD keeps out of Sund.
-- Status: open. Guide fix only: drop "a capability flag in Sund".
+- Status: folded into `Sund-PRD.md` v0.4 and `Sund-ImplementationGuide.md` v0.3
+  (PR #4) — but note that the *reasoning* above was overturned, not confirmed. A
+  revoke permission is not application policy: revocation is a server operation,
+  so a client-side rule restricting it binds only the device it restricts.
+  Decision 12 makes it an optional per-account administration mode with an
+  `admin`/`member` role, and the guide sentence is rewritten rather than deleted.
+  The as-built behaviour is unchanged and is now named: it is PRD 0.4's `flat`
+  mode, which stays the default.
 
 ## 2026-09-18 — Guide: no local pre-commit hook exists
 
@@ -151,3 +166,42 @@ CI). Those are tracked in `Sund-Status.md` → "Not built yet".
   succeeds — recommended, since it documents what the design already guarantees; or
   (b) enforce per-account sends, which reintroduces the sender↔account link, contradicts
   S8, and would force Postiljon and Brygga to share one account. André decides.
+
+## 2026-09-21 — `messages.status` is stored but never changes
+
+- Spec: `Sund-PRD.md` → Messages — "Send (by sender ID), receive/ack (by recipient
+  ID), per-message TTL, delivery status."
+- Actual: `messages.status` is written as `'stored'` at append and never updated
+  (`internal/store/queue.go`); an ack deletes the row rather than marking it, and
+  an expired message is purged on the next drain. So there is exactly one status,
+  and "delivery status" describes no behaviour a client can observe.
+- Why: ack-deletes is the right default for a blind relay — keeping delivered rows
+  around to carry a status would mean storing more, for longer, to no one's
+  benefit. The column predates the decision and was never removed.
+- Status: open, and split out of the 2026-09-18 data-model entry when the rest of
+  it was folded into PRD 0.5. Either define the statuses a client may see and what
+  transitions them (which means keeping rows past ack — weigh against
+  "stores briefly"), or drop "delivery status" from the PRD and the column with
+  it. Leaning drop: a recipient learns delivery by draining, and a sender learns
+  nothing by design.
+
+## 2026-09-21 — Key bundles: the PRD names the wrong verification authority
+
+- Spec: `Sund-PRD.md` → Devices → Key bundles — bundles are "signed by the
+  publishing device's identity key and verified by the fetcher against the device
+  list".
+- Actual: family-beacon, the first consumer, verifies a fetched bundle against
+  its roster's vouched `identity_pk`, not against Sund's device list
+  (`../family-beacon/docs/FamilyBeacon-Sessions.md` → "Verifying against the right
+  authority"; `../family-beacon/CLAUDE.md` decision #6). The server behaves
+  identically either way — this is a divergence in what the PRD tells a client
+  to trust, not in what Sund does.
+- Why: the device list is writable by whoever hosts the server; a vouched
+  identity key is not. A client that verified against the list would accept a
+  host-injected device's bundle, which is the attack family-beacon's roster layer
+  exists to prevent. Its implementation is the stronger of the two.
+- Status: open. Raised by family-beacon rather than discovered here, and
+  deliberately left out of the PRD 0.4 and 0.5 revisions to keep each to one
+  decision. The fix family-beacon proposes: amend Sund's wording to "against the
+  consumer's own membership record, where it has one", keeping the device list as
+  the fallback for a consumer that has none. Not blocking either side.

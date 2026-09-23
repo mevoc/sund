@@ -54,10 +54,21 @@ intent.
 
 ## Docs
 
-- `docs/Sund-PRD.md` — **current (v0.4).** Two-plane architecture, pseudonymous
+- `docs/Sund-PRD.md` — **current (v0.5).** Two-plane architecture, pseudonymous
   queues, device list/revocation/key bundles, push architecture (UnifiedPush/ntfy
   on Android; vendor APNS gateway on iOS — pluggable provider interface),
-  fingerprint-pinned server address, one-binary stack requirement. New in 0.4:
+  fingerprint-pinned server address, one-binary stack requirement. New in 0.5:
+  a per-device storage ceiling beside the per-account one (decision 13) — a
+  bulkhead so one device's backlog cannot exhaust the account's headroom. Needs
+  no new linkage (the quota check already resolves queue → owner device).
+  *Writing* a ceiling has no endpoint — it is an operator CLI act, because it is
+  a denial-of-service primitive — but it must not therefore be silent: a change
+  pings the account, `quota_bytes` is in the device list, and `GET /v1/me/quota`
+  lets a device read its own ceiling and usage, so being capped is
+  distinguishable from being full. Explicitly *not* a sender-side limit, since
+  there is no sender_device, and it makes the refusal a cheaper oracle for a
+  sender probing headroom — stated in the threat model rather than buried. 0.5
+  also syncs the data-model table with the schema, closing a deviation. From 0.4:
   an optional per-account administration model — `flat` (default, unchanged) vs.
   `managed` accounts, an `admin`/`member` device role, and admin-only revocation
   and invitation minting. Self-revocation is unconditional, an account never
@@ -75,12 +86,12 @@ intent.
   ARCHITECTURE.md updated to match). Remaining open: iOS gateway operations,
   signed administrative statements. (Blob storage and queue rotation are
   resolved — see the PRD's "Resolved since first listed as open".)
-- `docs/Sund-ImplementationGuide.md` — companion to PRD 0.4: components, API
+- `docs/Sund-ImplementationGuide.md` — companion to PRD 0.5: components, API
   sketch (two planes), walkthroughs for first-device onboarding and second-device
   invitation (SimpleX-style QR bootstrap), each step mapped to Family Beacon.
   Also the test strategy: unit + system suites (both per-commit), the beaconsim
-  client mockup, scenarios S1–S9 (plus S5b/S5c for administration). Its four
-  surfaced open items are resolved in PRD 0.3 and 0.4.
+  client mockup, scenarios S1–S10 (S5b/S5b2/S5b3/S5c administration, S10 quota).
+  Its four surfaced open items are resolved in PRD 0.3 and 0.4.
 - `docs/Sund-Status.md` — **implementation snapshot** (what the binary actually
   does, for consumers — chiefly family-beacon — and contributors): as-built data
   model, the implemented endpoints, auth/signing contract, push/revocation/quota

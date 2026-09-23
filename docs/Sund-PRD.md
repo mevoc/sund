@@ -127,7 +127,9 @@ Principles
 Scope — V1
 
 Accounts
-- Multi-tenant isolation, per-account quotas, root-admin provisioning.
+- Multi-tenant isolation **on the management plane**, per-account quotas,
+  root-admin provisioning. The transport plane is not account-scoped; see
+  Threat model → What an account is, and is not.
 - Quotas are attributed to the queue owner's account (the recipient side — the
   side the server knows). Senders stay pseudonymous without breaking accounting.
 - Storage quota has two levels, both recipient-side and both optional: a ceiling
@@ -686,7 +688,8 @@ Explicitly NOT hidden — residual metadata a host can observe:
   account ceiling alone.
 
   That makes the refusal a coarse oracle, new in 0.5 and the honest price of the
-  feature. A sender holding a valid sender ID can send minimum-size payloads to
+  feature. A sender holding a queue's live send credential — its sender ID, and
+  on a bound queue the bound key — can send minimum-size payloads to
   binary-search the remaining headroom, and poll to watch headroom return —
   learning roughly when the recipient drained (so, when it was last online) or
   when its messages expired. Sizes and timing are already listed above as visible
@@ -701,7 +704,7 @@ Explicitly NOT hidden — residual metadata a host can observe:
   knowingly. It reveals no payload content, no other queue, and
   nothing about who else is in the account — and the prober need not be an
   account member at all, since a send authenticates with the per-queue sender key
-  alone (`docs/deviations.md`, 2026-09-20, open).
+  alone (`docs/deviations.md`, 2026-09-20, closed in 0.7 by decision 15).
 - On iOS, wake timing (though nothing else) is additionally visible to the vendor
   push gateway and to Apple — see Push architecture.
 
@@ -709,11 +712,14 @@ What an account is, and is not. An account bounds the management plane — a
 device lists, fetches bundles from and revokes only within its own account — plus
 queue *ownership*, and therefore quota attribution and wake-up, plus billing.
 It bounds nothing on the transport plane, in **either** direction. Neither a send
-nor a receive consults an account: `recv`/`ack`/`retire` are authorized by the
-per-queue recipient key and a send by the per-queue sender key, and no column
-anywhere links either to a device or an account. The server has no tenancy fact
-to test and could only acquire one by recording the sender↔account link the
-blindness audit exists to prove absent.
+nor a receive consults an account *to authorize it*: `recv`/`ack`/`retire` are
+authorized by the per-queue recipient key and a send by the per-queue sender key,
+and no column anywhere links either to a device or an account. The one place a
+send touches account state at all is the recipient-side quota check, which is
+ownership again and is why a refusal can reach a sender who has no account of
+their own — see the refused-send bullet under residual metadata. The server has
+no tenancy fact to test for authorization, and could only acquire one by
+recording the sender↔account link the blindness audit exists to prove absent.
 
 This matters for how the guarantee is stated. It is not that cross-account reads
 fail and cross-account sends succeed — a cross-account *read* fails for the same

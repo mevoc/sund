@@ -2,6 +2,11 @@ Sund — Implementation Guide
 
 Status: v0.5 (Draft) — companion to Sund-PRD.md
 
+> New in 0.5: scenario S7 rewritten for PRD 0.7's decision 15 — the management
+> plane is account-scoped, the transport plane is not, and the cross-account send
+> is now asserted positively rather than described. Implemented as
+> `tests/test_tenant_isolation.py`.
+
 > New in 0.4: the per-device storage quota of PRD 0.5 (decision 13) — the
 > operator surface, the enforcement rule and the test coverage. Writing a ceiling
 > stays out of the API; reading one does not, so the sketch gains

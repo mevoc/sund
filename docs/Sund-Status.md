@@ -1,7 +1,8 @@
 Sund — Implementation Status
 
 Status: v0.1 (snapshot of the code at the storage-quota commit, 2026-07-20;
-"Not built yet" and the schema block refreshed against PRD 0.6 on 2026-09-23)
+"Not built yet", the schema block and multi-tenancy refreshed against PRD 0.7
+on 2026-09-23)
 — describes the code, not the plan
 
 This is a snapshot of what the Sund binary actually does as of the storage-quota
@@ -21,7 +22,7 @@ At a glance
   transport plane (pseudonymous blind queues).
 - Also built: push wake-up, device revocation, per-account storage quota.
 - Tests: a Go unit suite and a Python system suite (`beaconsim`) that drives the
-  real compiled binary with real crypto. ~49 Go cases, ~29 system tests, both
+  real compiled binary with real crypto. ~88 Go cases, 48 system tests, both
   per-commit. Includes the blindness audit (S8) and operator-survival (S9).
 - Not yet built: the account administration model of PRD 0.4 (administration
   modes, device roles), the per-device storage quota of PRD 0.5, iOS push
@@ -277,8 +278,9 @@ Test coverage
 - System suite (`uv run pytest`, drives the real binary): onboarding + pairing,
   device-to-device invitation, send/recv/ack, offline backlog, sender-key binding,
   push wake-up (contentless, SOS priority, device-list change), revocation (S5),
-  the blindness audit (S8), operator survival — backup/restore and restart (S9),
-  and storage quota.
+  tenant isolation (S7 — management plane scoped, transport plane not, the
+  cross-account send asserted positively), the blindness audit (S8), operator
+  survival — backup/restore and restart (S9), and storage quota.
 
 Run both with `make test-all`.
 

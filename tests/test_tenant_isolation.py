@@ -15,10 +15,11 @@ import base64
 import json
 
 import httpx
+from nacl.public import PublicKey, SealedBox
 from nacl.signing import SigningKey
 
 import beaconsim
-from beaconsim.client import HEADER_SENDER_KEY, sign_headers
+from beaconsim.client import HEADER_DEVICE_ID, HEADER_SENDER_KEY, sign_headers
 
 PAYLOAD = b'{"lat":55.6053,"lon":13.0038,"acc":8}'
 
@@ -121,3 +122,37 @@ def test_first_send_binds_and_a_second_key_is_refused(sund_server, new_account):
     assert r.status_code == 401, "a bound queue must refuse a second sender key"
 
     assert len(queue.recv()) == 1, "only the bound sender's message is stored"
+
+
+def test_send_is_not_filtered_on_a_volunteered_device_id(sund_server, new_account):
+    """A send that volunteers a device id is still authorized by the queue key alone.
+
+    The two cases above are wire-identical — a Sender presents no identity either
+    way — so on their own they pin only "an unidentified sender can send". This
+    one closes the gap the other direction: a future filter that refused senders
+    which *do* identify themselves would be building the sender-to-account link
+    S8 forbids, and would fail here first.
+    """
+    _, token_a = new_account()
+    _, token_b = new_account()
+    device_a = beaconsim.register_device(sund_server.base_url, token_a)
+    device_b = beaconsim.register_device(sund_server.base_url, token_b)
+    queue = device_a.create_queue()
+
+    ciphertext = SealedBox(PublicKey(queue.encryption_public_key)).encrypt(PAYLOAD)
+    body = json.dumps(
+        {"payload": base64.b64encode(bytes(ciphertext)).decode(), "ttl": 60}
+    ).encode()
+    path = f"/v1/send/{queue.sender_id}"
+
+    sender_key = SigningKey.generate()
+    headers = sign_headers(sender_key, "POST", path, body)
+    headers[HEADER_SENDER_KEY] = base64.b64encode(bytes(sender_key.verify_key)).decode()
+    # Volunteered, and from a different account than the queue's owner.
+    headers[HEADER_DEVICE_ID] = device_b.device_id
+
+    r = httpx.post(sund_server.base_url + path, headers=headers, content=body)
+    assert r.status_code == 202, (
+        "the server must ignore a volunteered device id on send, not filter on it"
+    )
+    assert queue.recv()[0]["plaintext"] == PAYLOAD

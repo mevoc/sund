@@ -188,7 +188,15 @@ Behavior details a consumer should know
   the pin. `internal/tlsid` is the implementation; `tests/beaconsim/pinning.py` is
   the client reference; `Sund-Pinning-Contract.md` is the normative spec every
   real client must implement.
-- Multi-tenancy: accounts are isolated. Cross-account reads/sends/revokes fail.
+- Multi-tenancy: the **management plane** is isolated — cross-account device-list
+  reads, bundle fetches and revokes all fail. The **transport plane** consults no
+  account in either direction: `recv`/`ack`/`retire` are authorized by the
+  per-queue recipient key, a send by the per-queue sender key. So a cross-account
+  send succeeds, a sender need hold no account at all, and a cross-account read
+  fails only because the caller lacks the recipient key — the same reason a
+  same-account device without it fails. A queue is protected by its keys, not by
+  its account (PRD 0.7, decision 15). First-send binding then fixes the
+  counterparty: after it, a different sender key is refused.
 
 ---
 

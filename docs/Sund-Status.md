@@ -1,7 +1,7 @@
 Sund — Implementation Status
 
 Status: v0.1 (snapshot of the code at the storage-quota commit, 2026-07-20;
-"Not built yet" and the schema block refreshed against PRD 0.5 on 2026-09-21)
+"Not built yet" and the schema block refreshed against PRD 0.6 on 2026-09-23)
 — describes the code, not the plan
 
 This is a snapshot of what the Sund binary actually does as of the storage-quota
@@ -63,16 +63,21 @@ Data model (actual SQLite schema)
     queues       recipient_id (pk), sender_id, owner_device, recipient_key,
                  sender_key (null until bound), created, retired
     messages     seq (autoincrement), id, queue_id (= a queue's recipient_id),
-                 payload (ciphertext), received_at, expires, status
+                 payload (ciphertext), received_at, expires
 
 Notes:
 - There is deliberately no column linking a sender device to a queue.
 - `capabilities` is stored, never interpreted (opaque to the server).
 - Timestamps are RFC3339 UTC at second precision; `messages.seq` gives a stable
   per-queue delivery order independent of that precision.
-- Migrations run on open: `CREATE TABLE IF NOT EXISTS` plus an idempotent
+- Migrations run on open: `CREATE TABLE IF NOT EXISTS`, an idempotent
   add-column step (`quota_bytes` was added this way; 0 = unlimited, so upgrading
-  an old database never retroactively caps its accounts).
+  an old database never retroactively caps its accounts), and — since PRD 0.6 —
+  an idempotent drop-column step, currently used only to remove `messages.status`
+  (see `docs/deviations.md`, 2026-09-21). The drop is destructive and one-way:
+  an older binary's append still names `status`, so downgrading across it fails
+  every send. Take the usual file copy before upgrading. A failed migration is
+  fail-closed — `Open` returns the error and the server does not start.
 
 ---
 

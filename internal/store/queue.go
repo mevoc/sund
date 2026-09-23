@@ -36,7 +36,6 @@ type Message struct {
 	Payload    []byte
 	ReceivedAt time.Time
 	Expires    time.Time
-	Status     string
 }
 
 // CreateQueue creates an open queue owned by ownerDevice. recipientKey
@@ -181,8 +180,8 @@ func (s *Store) AppendMessage(ctx context.Context, recipientID string, payload [
 	}
 
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO messages (id, queue_id, payload, received_at, expires, status)
-		 VALUES (?, ?, ?, ?, ?, 'stored')`,
+		`INSERT INTO messages (id, queue_id, payload, received_at, expires)
+		 VALUES (?, ?, ?, ?, ?)`,
 		id, recipientID, payload, now.Format(time.RFC3339), expires.Format(time.RFC3339),
 	); err != nil {
 		return nil, err
@@ -194,7 +193,6 @@ func (s *Store) AppendMessage(ctx context.Context, recipientID string, payload [
 	return &Message{
 		ID: id, QueueID: recipientID, Payload: payload,
 		ReceivedAt: now.Truncate(time.Second), Expires: expires.Truncate(time.Second),
-		Status: "stored",
 	}, nil
 }
 
@@ -206,7 +204,7 @@ func (s *Store) DrainMessages(ctx context.Context, recipientID string) ([]Messag
 		return nil, err
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, queue_id, payload, received_at, expires, status FROM messages WHERE queue_id=? ORDER BY seq`,
+		`SELECT id, queue_id, payload, received_at, expires FROM messages WHERE queue_id=? ORDER BY seq`,
 		recipientID,
 	)
 	if err != nil {
@@ -220,7 +218,7 @@ func (s *Store) DrainMessages(ctx context.Context, recipientID string) ([]Messag
 			m                  Message
 			receivedAt, expire string
 		)
-		if err := rows.Scan(&m.ID, &m.QueueID, &m.Payload, &receivedAt, &expire, &m.Status); err != nil {
+		if err := rows.Scan(&m.ID, &m.QueueID, &m.Payload, &receivedAt, &expire); err != nil {
 			return nil, err
 		}
 		m.ReceivedAt, _ = time.Parse(time.RFC3339, receivedAt)

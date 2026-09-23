@@ -9,7 +9,7 @@ encrypted messages between a user's devices, plus the device management that
 makes that trustworthy. The server transports sealed envelopes; it never
 interprets them. (Working name.)
 
-**Spec:** [`docs/Sund-PRD.md`](docs/Sund-PRD.md) (current, v0.5) ·
+**Spec:** [`docs/Sund-PRD.md`](docs/Sund-PRD.md) (current, v0.6) ·
 [`docs/Sund-ImplementationGuide.md`](docs/Sund-ImplementationGuide.md) ·
 [`docs/Sund-PriorArt.md`](docs/Sund-PriorArt.md)
 

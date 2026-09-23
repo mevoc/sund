@@ -1,6 +1,6 @@
 # Sund — deviations from the PRD and implementation guide
 
-Where the code, the guide or an issue departs from `Sund-PRD.md` (v0.5) or
+Where the code, the guide or an issue departs from `Sund-PRD.md` (v0.6) or
 `Sund-ImplementationGuide.md` (v0.4), it is recorded here at the time the departure
 is made. Open entries are the agenda for the next spec revision; a revision closes
 them by updating `Status`. Format and rules: `~/projects/CLAUDE.md`, *Design flow*.
@@ -178,12 +178,16 @@ CI). Those are tracked in `Sund-Status.md` → "Not built yet".
 - Why: ack-deletes is the right default for a blind relay — keeping delivered rows
   around to carry a status would mean storing more, for longer, to no one's
   benefit. The column predates the decision and was never removed.
-- Status: open, and split out of the 2026-09-18 data-model entry when the rest of
-  it was folded into PRD 0.5. Either define the statuses a client may see and what
-  transitions them (which means keeping rows past ack — weigh against
-  "stores briefly"), or drop "delivery status" from the PRD and the column with
-  it. Leaning drop: a recipient learns delivery by draining, and a sender learns
-  nothing by design.
+- Status: folded into `Sund-PRD.md` v0.6 (decision 14) — dropped, both halves.
+  The PRD's Messages section no longer promises a delivery status and says
+  positively what the model is instead (stored until acked, then the row is
+  deleted; no read receipt); the column is removed from the schema, from the
+  `Message` struct and from the append and drain queries, with a migration that
+  drops it from databases written by an older binary — destructive and one-way,
+  since an older binary's append still names `status`. It never reached the wire
+  — `messageView` carries id, payload, received_at and expires — so no client
+  contract changed. The alternative, defining real statuses, was rejected because
+  it means keeping rows past ack, against "it stores briefly (TTL)".
 
 ## 2026-09-21 — Key bundles: the PRD names the wrong verification authority
 

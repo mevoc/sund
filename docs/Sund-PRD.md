@@ -2,11 +2,19 @@ Sund
 
 «A blind strait between your devices.»
 
-Status: PRD v0.5 (Draft) — supersedes PRD 0.4
+Status: PRD v0.6 (Draft) — supersedes PRD 0.5
 
 > Working name: **Sund** (Swedish: a strait between islands — the channel between
 > skerries; also "sound, healthy"). The kernel extracted from Skerry
-> (`../skerry`). This revision adds one thing: an optional **per-device** storage
+> (`../skerry`). This revision removes one thing: the per-message delivery status
+> (decision 14), which described no behaviour — an ack deletes the row, so the
+> column only ever held one value. The Messages section now says positively what
+> the model is (stored until acked; no read receipt) instead of promising a
+> feature that was never built, and the column is gone from the schema. It never
+> reached the wire, so no client contract changes. That closes the last entry
+> carved out of the 2026-09-18 data-model deviation.
+>
+> PRD 0.5 added, for context: an optional **per-device** storage
 > ceiling beside the per-account one (decision 13), so that one device's backlog
 > cannot consume headroom the whole account shares. It costs no new linkage: the
 > quota check already resolves queue → owner device. Setting a ceiling stays an
@@ -403,8 +411,17 @@ Queues
 - V1 scope: queues connect devices within the same account.
 
 Messages
-- Send (by sender ID), receive/ack (by recipient ID), per-message TTL, delivery
-  status. Queues survive offline receivers; expired messages are deleted unread.
+- Send (by sender ID), receive/ack (by recipient ID), per-message TTL. Queues
+  survive offline receivers; expired messages are deleted unread. There is no
+  per-message delivery status and no read receipt: a message is stored until it
+  is acked, at which point its row is deleted, so "delivered" is not a state the
+  server keeps. A recipient learns what arrived by draining. Sund gives a sender
+  no delivery or read signal at all — that is the design rather than a gap
+  (decision 14) — which is narrower than saying a sender learns nothing: a send
+  can still fail closed against a retired queue (404) or a full one (507), and
+  the latter is a coarse oracle on the recipient's storage and drain timing. What
+  a sender can infer anyway is in Threat model → residual metadata; what Sund
+  deliberately does not tell it is delivery.
 - Payloads are opaque ciphertext, bounded by both quota levels (Accounts).
 
 Push wake-up
@@ -431,7 +448,7 @@ invitations  — id, token_hash, account_id, created, expires, consumed, revoked
                grants_role
 queues       — recipient_id, sender_id, owner_device, recipient_key, sender_key,
                created, retired
-messages     — seq, id, queue_id, payload, received_at, expires, status
+messages     — seq, id, queue_id, payload, received_at, expires
 
 There is deliberately no sender_device column anywhere in the transport plane.
 
@@ -449,11 +466,8 @@ out of step with `internal/store/store.go` (recorded in `docs/deviations.md`,
 2026-09-18). `seq` gives a stable per-queue delivery order at second-precision
 timestamps, `expires` is the absolute form of the per-message TTL that the purge
 query needs, and `invitations.id`/`revoked` are what decision 7's listable and
-revocable invitations actually require. One item from that entry is deliberately
-left open rather than papered over: `messages.status` exists but is only ever
-`'stored'`, since an ack deletes the row, so the "delivery status" the Messages
-section promises is not a feature yet. Either define the statuses or drop the
-phrase — a product decision, not a documentation one.
+revocable invitations actually require. The `messages.status` column that 0.5
+left carved out as an open question is gone in 0.6 — see decision 14.
 
 The three columns added in 0.4 — admin_mode, role and grants_role — are
 attributes of an account, a device and a token. None of them is an edge: nothing
@@ -815,8 +829,8 @@ The five decisions of PRD 0.2 (SimpleX queue addressing, UnifiedPush/ntfy push
 leg, Signal-style device management, fingerprint-pinned server address,
 one-binary stack requirement) carry over unchanged. Items 6–11 were added in 0.3:
 the three open items surfaced by the implementation guide, the test strategy, the
-stack lock and the second transport-trust mode. Item 12 came in 0.4; item 13 is
-new in 0.5:
+stack lock and the second transport-trust mode. Item 12 came in 0.4, item 13 in
+0.5; item 14 is new in 0.6:
 
 6. Push-ping fan-in made explicit. Confirmed: resolving queue → owner device at
    delivery time is the only transport→management linkage in the system, the
@@ -904,6 +918,27 @@ new in 0.5:
     accepted and recorded: a lower ceiling makes the refusal a cheap oracle for a
     sender probing a recipient's headroom and drain timing (Threat model,
     residual metadata).
+14. No per-message delivery status. The `messages.status` column existed from
+    the first schema, was written as `'stored'` and never updated, and was read
+    by nothing: an ack deletes the row and an expired message is purged, so
+    there was never a second state to be in. It is dropped — from the schema,
+    from the `Message` struct and from the append and drain queries — rather than
+    given real statuses. The load-bearing reason is retention: a status worth
+    reading has to outlive the ack, and keeping rows past ack contradicts "it
+    stores briefly (TTL)" in Principles. It would also turn a timing observation
+    the host can already make live into a durable per-message record of when a
+    recipient collected what — the difference between seeing traffic and keeping
+    a history of it. A second reason applies only if such a status were ever
+    exposed to senders, which this column never was: a read receipt is a
+    per-message timing signal about the recipient, and the transport plane exists
+    not to produce those. The Messages section now states the model positively
+    instead of promising a feature: stored until acked, then gone, no read
+    receipt, and no delivery signal to the sender — stated there with the
+    failure modes a sender *can* still observe, so the claim stays as narrow as
+    it is true. Migration drops the column from databases written by an older
+    binary, and it is one-way: an older binary's append names `status` in its
+    INSERT, so a rollback across this change fails every send. Since the column
+    never appeared in a response body, no client contract changes.
 
 Open decisions remaining
 

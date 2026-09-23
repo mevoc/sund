@@ -168,8 +168,7 @@ CREATE TABLE IF NOT EXISTS messages (
   queue_id    TEXT NOT NULL REFERENCES queues(recipient_id),
   payload     BLOB NOT NULL,
   received_at TEXT NOT NULL,
-  expires     TEXT NOT NULL,
-  status      TEXT NOT NULL DEFAULT 'stored'
+  expires     TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_messages_queue ON messages(queue_id);
 
@@ -199,17 +198,45 @@ func migrate(db *sql.DB) error {
 		return err
 	}
 	// Index on invitations.id must come after the column is guaranteed to exist.
-	_, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_invitations_id ON invitations(id)`)
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_invitations_id ON invitations(id)`); err != nil {
+		return err
+	}
+	// messages.status never held anything but 'stored' — an ack deletes the row
+	// and an expired message is purged — so it described no behaviour a client
+	// could observe (PRD 0.6, docs/deviations.md 2026-09-21). Dropped rather than
+	// defined: it never reached the wire, so nothing outside this package saw it.
+	return dropColumn(db, "messages", "status")
+}
+
+// dropColumn removes column from table if it is still present, so a database
+// written by an older binary loses it on startup. The inverse of ensureColumn.
+func dropColumn(db *sql.DB, table, column string) error {
+	has, err := hasColumn(db, table, column)
+	if err != nil || !has {
+		return err
+	}
+	_, err = db.Exec("ALTER TABLE " + table + " DROP COLUMN " + column)
 	return err
 }
 
 // ensureColumn adds column to table with the given DDL if it is not already
 // present, so old database files pick up new columns on startup.
 func ensureColumn(db *sql.DB, table, column, ddl string) error {
-	rows, err := db.Query("PRAGMA table_info(" + table + ")")
-	if err != nil {
+	has, err := hasColumn(db, table, column)
+	if err != nil || has {
 		return err
 	}
+	_, err = db.Exec("ALTER TABLE " + table + " ADD COLUMN " + column + " " + ddl)
+	return err
+}
+
+// hasColumn reports whether table already has column.
+func hasColumn(db *sql.DB, table, column string) (bool, error) {
+	rows, err := db.Query("PRAGMA table_info(" + table + ")")
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
 	found := false
 	for rows.Next() {
 		var (
@@ -218,23 +245,13 @@ func ensureColumn(db *sql.DB, table, column, ddl string) error {
 			dflt             any
 		)
 		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
-			rows.Close()
-			return err
+			return false, err
 		}
 		if name == column {
 			found = true
 		}
 	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return err
-	}
-	rows.Close()
-	if found {
-		return nil
-	}
-	_, err = db.Exec("ALTER TABLE " + table + " ADD COLUMN " + column + " " + ddl)
-	return err
+	return found, rows.Err()
 }
 
 func nowStr() string { return time.Now().UTC().Format(time.RFC3339) }

@@ -277,3 +277,168 @@ func TestPinnedClientNeverSkipsVerification(t *testing.T) {
 		t.Fatal("pinned transport allows TLS < 1.2")
 	}
 }
+
+// newManagedServer is newServer with managed accounts, so the role model is
+// live: devices enrol as members unless their invitation grants admin.
+func newManagedServer(t *testing.T) (*Conn, func() string) {
+	t.Helper()
+	st, err := store.Open(filepath.Join(t.TempDir(), "sund.db"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { st.Close() })
+	srv := httptest.NewServer(server.New(server.Config{Version: "test"}, st).Handler())
+	t.Cleanup(srv.Close)
+	token := func() string {
+		acc, err := st.CreateAccount(context.Background(), "standard", 0, store.AdminModeManaged)
+		if err != nil {
+			t.Fatalf("CreateAccount: %v", err)
+		}
+		tok, _, err := st.CreateInvitation(context.Background(), acc.ID, time.Minute, store.RoleAdmin)
+		if err != nil {
+			t.Fatalf("CreateInvitation: %v", err)
+		}
+		return tok
+	}
+	return NewConn(srv.URL, srv.Client()), token
+}
+
+// The client can drive a managed account end to end: mint a member invitation,
+// see the roles in the device list, promote, and be refused where the server
+// refuses. Postiljon is this package's first consumer and the PRD recommends a
+// managed account for exactly that two-component stack, so a client that cannot
+// do this leaves the recommendation unusable.
+func TestManagedAccountThroughTheClient(t *testing.T) {
+	ctx := context.Background()
+	conn, newToken := newManagedServer(t)
+
+	_, adminKey := mustKey(t)
+	admin, err := Register(ctx, conn, newToken(), adminKey, "", "")
+	if err != nil {
+		t.Fatalf("register admin: %v", err)
+	}
+
+	inv, err := admin.CreateInvitationAs(ctx, RoleMember)
+	if err != nil {
+		t.Fatalf("CreateInvitationAs: %v", err)
+	}
+	_, memberKey := mustKey(t)
+	member, err := Register(ctx, conn, inv.Token, memberKey, "", "")
+	if err != nil {
+		t.Fatalf("register member: %v", err)
+	}
+
+	roles := map[string]string{}
+	devs, err := admin.ListDevices(ctx)
+	if err != nil {
+		t.Fatalf("ListDevices: %v", err)
+	}
+	for _, d := range devs {
+		roles[d.ID] = d.Role
+	}
+	if roles[admin.ID] != RoleAdmin || roles[member.ID] != RoleMember {
+		t.Fatalf("roles = %v, want the first device admin and the invited one member", roles)
+	}
+
+	// A member is refused the admin-only acts, through the client.
+	if err := member.RevokeDevice(ctx, admin.ID); err == nil {
+		t.Fatal("a member must not be able to revoke a peer")
+	}
+	if _, err := member.CreateInvitation(ctx); err == nil {
+		t.Fatal("a member must not be able to mint an invitation")
+	}
+
+	// The admin promotes it, and now it can.
+	if err := admin.SetRole(ctx, member.ID, RoleAdmin); err != nil {
+		t.Fatalf("SetRole: %v", err)
+	}
+	if _, err := member.CreateInvitation(ctx); err != nil {
+		t.Fatalf("a promoted device should be able to mint: %v", err)
+	}
+}
+
+// A device reads its own ceiling and usage, and sets its own queue's ceiling.
+// Those are the two quota calls a client may make; the account and device
+// ceilings are the operator's, because they cap someone else.
+func TestQuotaThroughTheClient(t *testing.T) {
+	ctx := context.Background()
+	conn, newToken := newServer(t)
+
+	_, dk := mustKey(t)
+	dev, err := Register(ctx, conn, newToken(), dk, "", "")
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	rpub, rpriv := mustKey(t)
+	ids, err := dev.CreateQueue(ctx, rpub)
+	if err != nil {
+		t.Fatalf("CreateQueue: %v", err)
+	}
+	recipient := NewRecipient(conn, ids.RecipientID, rpriv)
+
+	if err := recipient.SetQuota(ctx, 128); err != nil {
+		t.Fatalf("SetQuota: %v", err)
+	}
+
+	// Sending past the queue's ceiling is refused, while the device and account
+	// ceilings are untouched.
+	_, spriv := mustKey(t)
+	sender := NewSender(conn, ids.SenderID, spriv)
+	if _, err := sender.Send(ctx, make([]byte, 100), SendOptions{}); err != nil {
+		t.Fatalf("first send should fit: %v", err)
+	}
+	if _, err := sender.Send(ctx, make([]byte, 100), SendOptions{}); err == nil {
+		t.Fatal("the queue ceiling should have refused the second send")
+	}
+
+	q, err := dev.Quota(ctx)
+	if err != nil {
+		t.Fatalf("Quota: %v", err)
+	}
+	if q.QuotaBytes != 0 {
+		t.Errorf("device ceiling = %d, want 0 (none set)", q.QuotaBytes)
+	}
+	if q.StoredBytes != 100 {
+		t.Errorf("stored bytes = %d, want 100", q.StoredBytes)
+	}
+}
+
+// Statements round-trip as opaque bytes and read back in order.
+func TestStatementsThroughTheClient(t *testing.T) {
+	ctx := context.Background()
+	conn, newToken := newServer(t)
+
+	_, dk := mustKey(t)
+	dev, err := Register(ctx, conn, newToken(), dk, "", "")
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	first, err := dev.AppendStatement(ctx, []byte("opaque-one"))
+	if err != nil {
+		t.Fatalf("AppendStatement: %v", err)
+	}
+	if first.Seq != 1 {
+		t.Fatalf("first statement seq = %d, want 1", first.Seq)
+	}
+	if _, err := dev.AppendStatement(ctx, []byte("opaque-two")); err != nil {
+		t.Fatalf("AppendStatement: %v", err)
+	}
+
+	all, err := dev.Statements(ctx, 0)
+	if err != nil {
+		t.Fatalf("Statements: %v", err)
+	}
+	if len(all) != 2 || string(all[0].Blob) != "opaque-one" || string(all[1].Blob) != "opaque-two" {
+		t.Fatalf("log = %v, want the two blobs in order", all)
+	}
+
+	// Polling from the highest seq held returns nothing new.
+	rest, err := dev.Statements(ctx, all[len(all)-1].Seq)
+	if err != nil {
+		t.Fatalf("Statements(since): %v", err)
+	}
+	if len(rest) != 0 {
+		t.Fatalf("since=latest returned %d statements, want none", len(rest))
+	}
+}

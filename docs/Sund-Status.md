@@ -1,9 +1,8 @@
 Sund — Implementation Status
 
 Status: v0.1 (snapshot of the code at the storage-quota commit, 2026-07-20;
-"Not built yet", the schema block, multi-tenancy and administration refreshed
-against PRD 0.11 on 2026-09-24, when the three quota levels and the account
-administration model were built) — describes the code, not the plan
+"Not built yet", the schema block, multi-tenancy, administration and the
+statement log refreshed against PRD 0.14 on 2026-09-24) — describes the code, not the plan
 
 This is a snapshot of what the Sund binary actually does as of the three-level
 quota commit, written for the people who build on it — chiefly family-beacon
@@ -22,10 +21,11 @@ At a glance
   transport plane (pseudonymous blind queues).
 - Also built: push wake-up, device revocation, storage quota at all three levels
   (account, device, queue — decisions 13, 16, 17), and the account
-  administration model (flat/managed accounts and device roles, decision 12).
+  administration model (flat/managed accounts and device roles, decision 12),
+  and the administrative statement log (decision 21).
 - Tests: a Go unit suite and a Python system suite (`beaconsim`) that drives the
-  real compiled binary with real crypto. 86 Go tests (102 with subtests) and
-  67 system tests, both
+  real compiled binary with real crypto. 89 Go tests (105 with subtests) and
+  70 system tests, both
   per-commit. Includes the blindness audit (S8) and operator-survival (S9).
 - Not yet built: iOS push provider, metrics. TLS/fingerprint pinning is
   the flagless default: `serve` generates a pinned CA and leaf on first run.
@@ -336,9 +336,12 @@ What a client (sund-client) must implement
 
 `client/` is the Go implementation of the contract (importable as
 `github.com/mevoc/sund/client`; first consumer: Postiljon), and
-`tests/beaconsim/` is the Python reference the system suite drives. A
-production client (family-beacon's Android/iOS/web) implements the same
-contract:
+`tests/beaconsim/` is the Python reference the system suite drives. `client/`
+covers every route the server exposes, including the ones a managed account
+needs (`CreateInvitationAs`, `SetRole`), the two quota calls a client may make
+(`Device.Quota` for its own ceiling and usage, `Recipient.SetQuota` for its own
+queue) and the statement log (`AppendStatement`, `Statements`). A production
+client (family-beacon's Android/iOS/web) implements the same contract:
 
 1. Device identity: generate an Ed25519 keypair; the private key never leaves the
    device.
@@ -385,6 +388,8 @@ Test coverage
 - System suite (`uv run pytest`, drives the real binary): onboarding + pairing,
   device-to-device invitation, send/recv/ack, offline backlog, sender-key binding,
   push wake-up (contentless, SOS priority, device-list change), revocation (S5),
+  administrative statements (S12 — admin writes, member reads, member cannot
+  write, the size and retention caps, and a revoked device locked out),
   tenant isolation (S7 — management plane scoped, transport plane not, the
   cross-account send asserted positively), the three quota levels (S11 — the
   per-queue bulkhead, the refusal naming no level, and that only the owner may
@@ -408,7 +413,8 @@ Not built yet (relative to the PRD / API sketch)
 
 Open design decisions (PRD): iOS gateway operations, and whether administrative
 acts should be signed by the acting device so peers can verify them without
-trusting the server (open decision 2, added in PRD 0.4).
+trusting the server — built in PRD 0.13 as the statement log, with its
+verification authority corrected in 0.14 (decision 22).
 Blob/object storage is a Non-goal (add when a consumer needs it), and queue
 rotation is client-driven by design — the create/retire primitives plus a
 fail-closed 404 for a stale sender suffice, and no server-assisted redirect is
@@ -438,7 +444,9 @@ Code map
       quota.go              quota classes
     internal/sigauth/       canonical signing string + header names
     client/                 Go client: address parsing (both trust modes),
-                            request signing, Device / Recipient / Sender
+                            request signing, Device / Recipient / Sender.
+                            Covers every v1 route: roles, all three quota
+                            levels, administrative statements
     internal/push/          Pinger interface, UnifiedPush, Noop
     tests/beaconsim/        reference client (Python)
     tests/                  system suite (pytest)

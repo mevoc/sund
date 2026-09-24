@@ -8,12 +8,19 @@ ciphertext, and the plaintext markers appear nowhere on disk or in the log.
 
 import sqlite3
 
+from nacl.public import PrivateKey, SealedBox
+
 import beaconsim
 
 COORDS = b'{"lat":55.60531,"lon":13.00382,"acc":6}'
 SOS = b"SOS-HELP-ME-NOW"
 BATTERY = b'{"battery":17,"charging":false}'
-MARKERS = [COORDS, SOS, BATTERY]
+# An administrative statement names an actor and a target. Sund's model forbids
+# recording that pair, and the only thing keeping it out of the database is that
+# the client encrypts the blob — so the marker belongs in this audit, not in a
+# test that encrypts a string and checks the same string comes back unreadable.
+ADMIN_ACT = b'{"act":"revoke","actor":"dev_AAA","target":"dev_ZZZ"}'
+MARKERS = [COORDS, SOS, BATTERY, ADMIN_ACT]
 
 
 def _read_all_db_bytes(db_path) -> bytes:
@@ -53,9 +60,21 @@ def test_blindness_audit(sund_server, new_account, push_sink):
     # Touch revocation too.
     a.revoke_device(c.device_id)
 
+    # And the administrative statement log, which is the newest place an
+    # actor-to-target record could end up (PRD 0.13, decision 21).
+    account_key = PrivateKey.generate()
+    a.append_statement(bytes(SealedBox(account_key.public_key).encrypt(ADMIN_ACT)))
+
     # --- Audit the database structure ---
     con = sqlite3.connect(f"file:{sund_server.db_path}?mode=ro", uri=True)
     try:
+        statement_cols = [r[1] for r in con.execute("PRAGMA table_info(statements)")]
+        assert statement_cols == ["account_id", "seq", "blob", "created"], (
+            f"the statement log must carry no actor or target column: {statement_cols}"
+        )
+        stored = list(con.execute("SELECT blob FROM statements"))
+        assert len(stored) == 1, "the statement should have been stored"
+
         queue_cols = [row[1] for row in con.execute("PRAGMA table_info(queues)")]
         device_cols = [c for c in queue_cols if c.endswith("_device")]
         assert device_cols == ["owner_device"], (

@@ -2,27 +2,28 @@ Sund
 
 «A blind strait between your devices.»
 
-Status: PRD v0.8 (Draft) — supersedes PRD 0.7
+Status: PRD v0.9 (Draft) — supersedes PRD 0.8
 
 > Working name: **Sund** (Swedish: a strait between islands — the channel between
 > skerries; also "sound, healthy"). The kernel extracted from Skerry
-> (`../skerry`). This revision does three things, all in the threat model.
-> **Decision 16** withholds a device's storage ceiling from its peers: it is read
-> by the device it caps and by nobody else. The ceiling was published in 0.5 so
-> that a capped device could tell being capped from being full, and self-read
-> already does that — publishing it to peers bought no accountability, since a
-> ceiling confers nothing over anyone and no peer can change one, while selling a
-> real capability, since a peer who knows the ceiling knows exactly what silences
-> its neighbour. **The residual-metadata list is restructured** to say, for each
-> item, who can observe it *and what observing it enables*: a pure disclosure is
-> documented and lived with, an enabler is a design question, and the two were
-> previously run together. `last_seen` joins the list in the process — every
-> member can see when every other member's device last checked in, which was
-> never written down. **And what sharing an account costs** two co-located
-> server components is stated in one place, at Brygga's request (`mevoc/sund` #3).
+> (`../skerry`). This revision adds the third and last level of the storage
+> quota: a ceiling on a single queue (decision 17). It is the sender bound the
+> threat model has always said it lacked, reached from the other side — a
+> recipient mints one queue per peer, so *which peer* is already *which queue*,
+> and capping the queue caps the peer without the server ever learning who it is.
+> Unlike the device ceiling it is set by the queue's own owner, which makes it
+> nobody's weapon and so needs none of decision 13's machinery. The rate-shaped
+> variant that would also stop ping-spam is deferred, because its counter would
+> be the first state here that outlives the data it describes.
 >
-> Nothing here is implemented: decisions 12, 13 and 16 all sit in
-> `Sund-Status.md` → "Not built yet", which is why 16 costs nothing to apply.
+> PRD 0.8 did three things, for context: decision 16 (a device's ceiling is
+> read by the device it caps and nobody else), the residual-metadata list
+> restructured by observer *and by what observing enables*, and what sharing an
+> account costs two co-located server components.
+>
+> Nothing in 0.4 through 0.9 is implemented: decisions 12, 13, 16 and 17 all sit
+> in `Sund-Status.md` → "Not built yet", which is why each has cost nothing to
+> revise as the next one exposed a flaw in the last.
 
 ---
 
@@ -110,9 +111,10 @@ Accounts
   Threat model → What an account is, and is not.
 - Quotas are attributed to the queue owner's account (the recipient side — the
   side the server knows). Senders stay pseudonymous without breaking accounting.
-- Storage quota has two levels, both recipient-side and both optional: a ceiling
-  on the account's stored bytes, and one on an individual device's. A send is
-  refused if it would take *either* past its ceiling. Device ceilings need not
+- Storage quota has three levels, all recipient-side and all optional: a ceiling
+  on the account's stored bytes, one on an individual device's, and one on a
+  single queue's (decision 17). A send is refused if it would take *any* of them
+  past its ceiling. Device ceilings need not
   sum to the account ceiling — over-committing is normal and correct, exactly as
   it is for disk quotas — and a device with no ceiling of its own is bounded only
   by the account's, which is PRD 0.4 behaviour. "Stored bytes", the boundary rule
@@ -449,6 +451,47 @@ Queues
       ID buys nothing on a bound queue.
     - Neither check involves an account. A sender may hold no account on the
       server, and a send into a queue owned by a different account succeeds.
+- Per-queue storage ceiling — the third and last level of the quota, and the one
+  that bounds a *sender* (decision 17). A queue may carry its own ceiling on the
+  stored bytes held in it, set by the queue's owner. It reuses no new linkage at
+  all: the count is `SUM(LENGTH(payload))` over one queue's own rows, with none
+  of the joins the account and device levels need.
+
+  What makes it the sender bound the design was said to lack: a recipient mints
+  one queue per peer and hands that sender ID to exactly one party, which
+  first-send binding then fixes. So *which peer is sending* is already expressed,
+  exactly, as *which queue* — the server simply never learns the peer's name.
+  Capping a queue therefore caps a peer, with no sender↔identity record and no
+  new metadata. Earlier revisions said flatly that bounding a sender would
+  require the link Sund refuses; that is true of bounding a sender *identity* and
+  false of bounding a *channel*, and in this model the two coincide.
+
+  The owner sets it, with the queue's own recipient key — the same credential
+  that reads, acks and retires — so no device identity enters, and it is a
+  transport-plane operation like the rest. This is the reason it needs none of
+  decision 13's machinery: capping your own inbound channel limits only what you
+  receive. It harms no third party, so it is not a denial-of-service primitive,
+  so it raises no authorization question, needs no operator, and carries no
+  visibility requirement.
+
+  Two boundaries worth being exact about, since they cut opposite ways:
+    - The *limit* is harmless to disclose. Knowing a channel is capped at 1 MiB
+      enables nothing against anyone else, so a recipient may tell its peer the
+      budget out of band, in the same pairing message that carries the sender ID.
+      The server never discloses it, because it has no reason to.
+    - The *remaining headroom* MUST NOT be disclosed, and in particular a send
+      response MUST NOT carry it. It would hand the sender, for free and
+      precisely, the drain-timing signal the refused-send oracle currently makes
+      it probe for (Threat model → residual metadata). A sender learns from the
+      refusal and nothing else, exactly as at the other two levels.
+
+  What it does not solve: every send wakes the recipient, so a peer can sit
+  inside a small budget and still ping-spam by sending, waiting to be acked, and
+  sending again. Bounding *that* means counting sends per window regardless of
+  ack, which is a rate rather than a quota and is deliberately not in V1 —
+  decision 17 states why. The unilateral remedy already exists and is unchanged:
+  the owner retires the queue. A budget is the dial between "unlimited" and
+  "gone", worth having because retiring costs a re-pair.
 - V1 scope: Sund offers no cross-account *addressing, routing or discovery* —
   there is no way to name another account, enumerate it, or reach a device
   through it, and the management plane is isolated. What it does not do is
@@ -494,20 +537,22 @@ bundles      — device_id, blob (opaque, size-capped), updated
 invitations  — id, token_hash, account_id, created, expires, consumed, revoked,
                grants_role
 queues       — recipient_id, sender_id, owner_device, recipient_key, sender_key,
-               created, retired
+               quota_bytes, created, retired
 messages     — seq, id, queue_id, payload, received_at, expires
 
 There is deliberately no sender_device column anywhere in the transport plane.
 
-A `quota_bytes` of 0 means "no ceiling at this level", so an account or device
-that has never been given one behaves exactly as it did before the column
-existed — which is what makes both quota levels additive rather than a migration.
+A `quota_bytes` of 0 means "no ceiling at this level", so an account, device or
+queue that has never been given one behaves exactly as it did before the column
+existed — which is what makes all three quota levels additive rather than a
+migration.
 
 This table is design intent, and the promise attached to it runs one way: every
 column the implementation actually has appears here. Not the converse — four
 columns listed above are specified and unbuilt (`accounts.admin_mode`,
-`devices.role`, `invitations.grants_role` from 0.4 and `devices.quota_bytes` from
-0.5), and `Sund-Status.md` → "Not built yet" tracks that gap. The one-way promise
+`devices.role`, `invitations.grants_role` from 0.4, `devices.quota_bytes` from
+0.5 and `queues.quota_bytes` from 0.9), and `Sund-Status.md` → "Not built yet"
+tracks that gap. The one-way promise
 had lapsed and is repaired here: the accounts, invitations and messages rows were
 out of step with `internal/store/store.go` (recorded in `docs/deviations.md`,
 2026-09-18). `seq` gives a stable per-queue delivery order at second-precision
@@ -693,6 +738,9 @@ here enables anything it could not already do):
   error path is not content-free: a failed push ping logs the transport error,
   which carries the device's push endpoint URL. Host-observable only, so it
   enables nothing the host did not already hold.
+- Per-queue ceilings: `queues.quota_bytes` tells a host what tolerance a
+  recipient has configured for each channel it owns. Owner-written, tiny, and it
+  says nothing the host could not infer from watching that queue refuse.
 - The account's shape: `admin_mode` says whether an account is flat or managed
   before any device has registered, `role` says which device administers a
   managed account, `grants_role` says at mint time that an account is about to
@@ -742,9 +790,11 @@ Observable by a **sender** holding a queue's credentials — who may be an accou
 member, or may hold no account on the server at all (decision 15):
 
 - **A refused send (507).** Mechanically: the refusal says storage is full on the
-  recipient side at one of the two levels and does not say which, which it MUST
-  NOT, since a sender able to tell "account full" from "device full" would learn
-  about account-wide state it otherwise cannot see. It does not mean "this queue
+  recipient side at one of the three levels and does not say which, which it MUST
+  NOT: a sender able to tell "account full" from "device full" would learn about
+  account-wide state it otherwise cannot see, and one able to pick out "queue
+  full" would learn that the recipient had singled this channel out. It does not
+  mean "this queue
   is full": a device ceiling covers that device's stored bytes across every queue
   it owns, including queues the sender holds no ID for and cannot enumerate. And
   where the device ceiling is the lower of the two — the usual reason to set one,
@@ -887,9 +937,13 @@ Consequences a consumer must weigh:
   unsolicited. A managed account does not change this.
 - Because quota is attributed to the recipient and senders are pseudonymous (no
   sender_device to rate-limit), such a member can consume a victim's quota by
-  filling its queues; the transport plane cannot throttle per sender. Neither the
-  administration model nor per-device quota changes that — the remedy is still
-  revocation. What per-device quota (decision 13) changes is the blast radius: a
+  filling its queues; the transport plane cannot throttle a sender *by identity*.
+  It can now bound one by channel: a per-queue ceiling (decision 17) caps what a
+  given peer can leave in the queue the victim minted for it, which is as good as
+  per-sender wherever the recipient keeps one queue per peer. Neither the
+  administration model nor the quota levels prevents the flood itself — the
+  remedy for a member turned hostile is still revocation. What per-device quota
+  (decision 13) changes is the blast radius: a
   victim with its own ceiling absorbs the flood alone instead of exhausting the
   headroom every other device in the account shares. Containment, not defence,
   and worth having only because the undefended case is otherwise account-wide.
@@ -1179,6 +1233,38 @@ stack lock and the second transport-trust mode. Item 12 came in 0.4, item 13 in
     to account, withhold what only makes it easier to act on someone. The
     restructured residual-metadata list exists to make that judgement visible per
     item rather than buried in prose.
+17. A per-queue storage ceiling — the sender bound, arrived at from the other
+    side. The threat model has always conceded that a peer can fill a victim's
+    queues and that the transport plane cannot throttle a sender, and earlier
+    revisions said flatly that bounding one would need the sender↔identity link
+    Sund refuses. That is true of bounding a sender *identity* and false of
+    bounding a *channel*: a recipient mints one queue per peer and binds it to
+    one sender key, so *which peer* is already expressed as *which queue*, and
+    capping the queue caps the peer without the server learning who it is. It is
+    also the cheapest of the three levels to enforce — one queue's own rows, no
+    joins.
+
+    Set by the owner with the queue's recipient key, on the transport plane, with
+    no device identity involved. None of decision 13's machinery applies, and the
+    reason is worth keeping in view: capping your own inbound channel limits only
+    what you receive, so it is not a denial-of-service primitive, so there is no
+    authorization question, no operator-only write, and no visibility
+    requirement. Two adjacent quota values, opposite answers — the device ceiling
+    is withheld from peers (decision 16) because knowing it helps you act on
+    someone else; a queue's own limit is harmless for its sender to know, and may
+    be shared out of band with the sender ID. Its *remaining headroom* is not,
+    and MUST NOT appear in a send response: that would hand over, precisely and
+    for free, the drain-timing signal the refused-send oracle makes a prober work
+    for.
+
+    Deferred, and named so it is not mistaken for an oversight: the *rate*-shaped
+    variant, counting sends per window regardless of ack, which is what would
+    stop a peer ping-spamming inside a small budget by sending, being acked, and
+    sending again. It is out of V1 because it needs a counter that outlives the
+    messages it describes — the first state in Sund that would — and that cuts
+    against "it stores briefly (TTL)" for a threat the owner can already end by
+    retiring the queue. Revisit if a consumer shows the annoyance case matters
+    more than the retained metadata costs.
 
 Open decisions remaining
 

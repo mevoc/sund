@@ -54,10 +54,15 @@ intent.
 
 ## Docs
 
-- `docs/Sund-PRD.md` — **current (v0.8).** Two-plane architecture, pseudonymous
+- `docs/Sund-PRD.md` — **current (v0.9).** Two-plane architecture, pseudonymous
   queues, device list/revocation/key bundles, push architecture (UnifiedPush/ntfy
   on Android; vendor APNS gateway on iOS — pluggable provider interface),
-  fingerprint-pinned server address, one-binary stack requirement. New in 0.8:
+  fingerprint-pinned server address, one-binary stack requirement. New in 0.9:
+  a per-queue storage ceiling (decision 17) — the sender bound the threat model
+  said it lacked, reached from the other side: a recipient mints one queue per
+  peer, so capping the queue caps the peer without the server learning who it is.
+  Set by the queue's owner on the transport plane, which makes it nobody's
+  weapon. The rate-shaped variant is deferred. From 0.8:
   a device's storage ceiling is self-scoped (decision 16 — publish what holds
   power to account, withhold what only makes it easier to act on someone); the
   residual-metadata list is restructured by **observer** and by **what observing
@@ -104,7 +109,7 @@ intent.
   ARCHITECTURE.md updated to match). Remaining open: iOS gateway operations,
   signed administrative statements. (Blob storage and queue rotation are
   resolved — see the PRD's "Resolved since first listed as open".)
-- `docs/Sund-ImplementationGuide.md` — companion to PRD 0.8: components, API
+- `docs/Sund-ImplementationGuide.md` — companion to PRD 0.9: components, API
   sketch (two planes), walkthroughs for first-device onboarding and second-device
   invitation (SimpleX-style QR bootstrap), each step mapped to Family Beacon.
   Also the test strategy: unit + system suites (both per-commit), the beaconsim

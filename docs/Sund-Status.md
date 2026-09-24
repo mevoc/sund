@@ -23,7 +23,7 @@ At a glance
 - Also built: push wake-up, device revocation, and storage quota at all three
   levels — account, device and queue (PRD 0.10, decisions 13, 16 and 17).
 - Tests: a Go unit suite and a Python system suite (`beaconsim`) that drives the
-  real compiled binary with real crypto. ~94 Go cases, 52 system tests, both
+  real compiled binary with real crypto. ~94 Go cases, 53 system tests, both
   per-commit. Includes the blindness audit (S8) and operator-survival (S9).
 - Not yet built: the account administration model of PRD 0.4 (administration
   modes, device roles), iOS push provider, metrics. TLS/fingerprint pinning is
@@ -151,7 +151,9 @@ Behavior details a consumer should know
 - Revocation: one atomic step kills the identity key, clears the push endpoint,
   and retires every queue the device owns (dropping their messages). The revoked
   device's signed requests then fail and its queues 404. The account's other
-  devices are pinged to refetch and rotate. **Any device in an account may revoke
+  devices are pinged to refetch and rotate, and so is the revoked device itself —
+  its endpoint is captured before revocation clears it, so it learns rather than
+  going quiet (family-beacon's roster requires this). **Any device in an account may revoke
   any other, including itself** — the binary has no role model. PRD 0.4 adds an
   optional per-account administration model (flat/managed accounts,
   `admin`/`member` roles) on top of this; none of it is implemented, so a consumer

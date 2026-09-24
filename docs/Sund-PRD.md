@@ -167,8 +167,10 @@ Devices
   Storage quota). That is not a courtesy: the host is the one party none of this
   binds, so it must not also hold the only silent act. A
   revocation pings its target too — it is a device the act was
-  performed on, and the one with most reason to be told — so the ping is
-  attempted *before* the target's push endpoint is cleared, in the same step; an
+  performed on, and the one with most reason to be told — so its endpoint is
+  captured before revocation clears it and the ping is dispatched once the
+  revocation commits, rather than before, so a failed revocation never tells a
+  device it was removed; an
   unreachable target learns instead from its next request, which fails closed, and
   a consumer that promises a removed device will be told cannot rely on the ping
   alone. Because a ping carries nothing, a woken client cannot know *which* act

@@ -246,13 +246,17 @@ CI). Those are tracked in `Sund-Status.md` → "Not built yet".
 - Why: the wake helper existed to tell an account's *other* devices to refetch,
   and revocation reused it. The PRD sentence was written later (0.4, when the
   propagation rule was sharpened) and describes the intent rather than the code.
-- Status: open, and surfaced by the privacy gate on PRD 0.8 rather than by a
-  consumer. It matters because family-beacon's roster spec requires that "the
-  removed device is told, when it is reachable" and the PRD's own
-  anti-stalkerware argument leans on the act being visible to the device it is
-  exercised over. Two ways to close it: ping the target before clearing its
-  endpoint, which is the order the PRD already describes and a small change to
-  `handleRevoke`; or drop the sentence and state that a revoked device learns
-  from its next failed request, which is the weaker promise the code makes today.
-  Recommend the first — the PRD reasoned its way to the right behaviour and only
-  the implementation is missing, the same shape as the pre-commit hook.
+- Status: closed 2026-09-24 by implementing it, the first option. `handleRevoke`
+  now captures the target's endpoint before `RevokeDevice` clears it and
+  dispatches the ping once the revocation commits. The PRD's wording is adjusted
+  by one clause: it said the ping is attempted *before* the endpoint is cleared,
+  which read as "before the revocation", and pinging before the write commits
+  would tell a device it was removed even when the revocation then failed.
+  Capturing the endpoint first achieves what the sentence was reaching for
+  without that hazard.
+
+  Normal priority deliberately, not high: the urgency hint is a disclosure
+  (decision 18) and being revoked does not warrant spending it. Pinned by
+  `tests/test_revocation.py::test_revoke_pings_the_target_too`, which gives the
+  target and its peer distinct sink paths and asserts both are woken — it fails
+  against the previous code, which is the point of writing it this way.

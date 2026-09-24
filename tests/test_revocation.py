@@ -86,3 +86,35 @@ def test_cross_account_revoke_forbidden(sund_server, new_account, push_sink):
 
     # The stranger is untouched: it can still make signed requests.
     assert stranger.list_devices()  # does not raise
+
+
+def test_revoke_pings_the_target_too(sund_server, new_account, push_sink):
+    """The removed device is told, not only its peers.
+
+    It is the device the act was performed on, and family-beacon's roster spec
+    requires that a removed device is told when it is reachable. The ping has to
+    be dispatched with an endpoint captured before revocation, since revoking
+    clears it (docs/deviations.md, 2026-09-23).
+    """
+    _, token = new_account()
+    a = beaconsim.register_device(
+        sund_server.base_url, token, push_endpoint=push_sink.url("/peer")
+    )
+    token_b = a.create_invitation().token
+    b = beaconsim.register_device(
+        sund_server.base_url, token_b, push_endpoint=push_sink.url("/target")
+    )
+    push_sink.wait_for(1)
+    push_sink.received.clear()
+
+    a.revoke_device(b.device_id)
+    assert push_sink.wait_for(2), "both the peer and the target should be pinged"
+
+    paths = {p["path"] for p in push_sink.received}
+    assert "/target" in paths, "the revoked device was never told it was revoked"
+    assert "/peer" in paths, "the account's other devices must still be woken"
+    for ping in push_sink.received:
+        assert ping["body"] == b"", "pings stay contentless"
+        assert ping["priority"] is None, (
+            "revocation must not spend the urgency hint (PRD decision 18)"
+        )

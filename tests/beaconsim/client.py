@@ -150,6 +150,22 @@ class Client:
         body = json.dumps({"grants_role": grants_role}).encode() if grants_role else b""
         return self._request("POST", "/v1/invitations", body)
 
+    def append_statement(self, blob: bytes) -> httpx.Response:
+        """Write one opaque administrative statement to the account log.
+
+        A real client signs the statement with its identity key AND encrypts it
+        to the account's devices: plaintext would make the log the actor-to-target
+        record the data model refuses (PRD 0.13, decision 21). Sund parses none
+        of that — it stores bytes.
+        """
+        body = json.dumps({"statement": base64.b64encode(blob).decode()}).encode()
+        return self._request("POST", "/v1/statements", body)
+
+    def list_statements(self, since: int = 0) -> list[dict]:
+        r = self.get(f"/v1/statements/{since}")
+        r.raise_for_status()
+        return r.json()["statements"]
+
     def get_quota(self) -> dict:
         """This device's own ceiling and usage. Self-scoped: no peer can be named."""
         r = self.get("/v1/me/quota")

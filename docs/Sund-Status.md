@@ -24,8 +24,8 @@ At a glance
   (account, device, queue — decisions 13, 16, 17), and the account
   administration model (flat/managed accounts and device roles, decision 12).
 - Tests: a Go unit suite and a Python system suite (`beaconsim`) that drives the
-  real compiled binary with real crypto. 80 Go tests (99 with subtests) and
-  61 system tests, both
+  real compiled binary with real crypto. 86 Go tests (102 with subtests) and
+  67 system tests, both
   per-commit. Includes the blindness audit (S8) and operator-survival (S9).
 - Not yet built: iOS push provider, metrics. TLS/fingerprint pinning is
   the flagless default: `serve` generates a pinned CA and leaf on first run.
@@ -61,6 +61,7 @@ Data model (actual SQLite schema)
     devices      id, account_id, public_key, push_endpoint, capabilities,
                  created, last_seen, revoked, quota_bytes, role
     bundles      device_id (pk), blob (opaque, size-capped), updated
+    statements   account_id + seq (pk), blob (opaque, size-capped), created
     invitations  token_hash (pk), id, account_id, created, expires, consumed,
                  revoked, grants_role
     queues       recipient_id (pk), sender_id, owner_device, recipient_key,
@@ -93,6 +94,8 @@ HTTP API (implemented endpoints)
     GET  /v1/devices                   device signature        list account devices
     POST /v1/devices/{id}/revoke       device signature        revoke a device
     POST /v1/devices/{id}/role         device signature        promote/demote (admin)
+    POST /v1/statements                device signature        append admin statement
+    GET  /v1/statements/{since}        device signature        read the account log
     POST /v1/invitations               device signature        mint a pairing token
     GET  /v1/invitations               device signature        list outstanding invitations
     POST /v1/invitations/{id}/revoke   device signature        revoke before use
@@ -192,6 +195,23 @@ Behavior details a consumer should know
   - `role` is in the device-list response, deliberately: authority over other
     devices must be visible to the devices it is held over. Contrast
     `quota_bytes`, which is not (decision 16).
+- Administrative statements: an append-only per-account log of opaque blobs
+  (PRD 0.13, decision 21). An admin appends with `POST /v1/statements`; every
+  device in the account reads with `GET /v1/statements/{since}`, exclusive of
+  `since`. The server never parses a blob — it stores bytes, as it does a key
+  bundle. A statement is 4 KiB at most, an account keeps its 256 most recent,
+  and sequence numbers are per account so one account's log reveals nothing
+  about another's volume.
+  - The blob is signed **and encrypted** by the client. Signing is what lets a
+    peer tell a real act from one a hostile host invented; encryption is what
+    stops the log being the actor-to-target record the schema refuses. Sund can
+    check neither, which is why neither is a server rule.
+  - `since` is a path segment rather than a query parameter because the signing
+    string covers method and path only — a query filter would be the one
+    unsigned input in a signed API.
+  - It defeats forgery, not suppression: the host serves the log, so it can
+    withhold or truncate it, and a client cannot distinguish that from an
+    account where nothing happened.
 - Quota: three ceilings, all counted on the owner (recipient) side — the
   account's, the owning device's, and the queue's. A send is refused with 507 if
   it would take *any* of them past its limit; the boundary is inclusive, so

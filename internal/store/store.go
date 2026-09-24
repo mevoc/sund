@@ -218,6 +218,20 @@ CREATE TABLE IF NOT EXISTS bundles (
   blob      BLOB NOT NULL,
   updated   TEXT NOT NULL
 );
+
+-- Administrative statements (PRD 0.13, decision 21): an append-only per-account
+-- log of opaque blobs an admin writes to describe what it did, so peers can
+-- verify an act against the device list instead of trusting the server's word.
+-- The blob is signed AND encrypted by the client: plaintext would make this the
+-- "X did A to Y" record the data model refuses. seq is per account, not global,
+-- so one account's log never reveals another's volume.
+CREATE TABLE IF NOT EXISTS statements (
+  account_id TEXT NOT NULL REFERENCES accounts(id),
+  seq        INTEGER NOT NULL,
+  blob       BLOB NOT NULL,
+  created    TEXT NOT NULL,
+  PRIMARY KEY (account_id, seq)
+);
 `
 
 func migrate(db *sql.DB) error {
@@ -869,4 +883,95 @@ func (s *Store) PromoteDevice(ctx context.Context, deviceID string) error {
 	}
 	_, err := s.db.ExecContext(ctx, `UPDATE devices SET role=? WHERE id=?`, RoleAdmin, deviceID)
 	return err
+}
+
+// Administrative-statement limits (PRD 0.13, decision 21). The blob is opaque,
+// so the only things Sund can bound are its size and how many an account keeps.
+const (
+	// MaxStatementBytes caps one statement. Generous for a signed, encrypted
+	// description of one act; far too small to be storage.
+	MaxStatementBytes = 4 << 10
+	// MaxStatementsPerAccount bounds the log. Oldest are dropped, which keeps
+	// the store finite and, deliberately, keeps the window of administrative
+	// activity a host can observe finite too.
+	MaxStatementsPerAccount = 256
+)
+
+// ErrStatementTooLarge is returned when a statement exceeds MaxStatementBytes.
+var ErrStatementTooLarge = errors.New("statement too large")
+
+// Statement is one opaque entry in an account's administrative log.
+type Statement struct {
+	Seq     int64
+	Blob    []byte
+	Created time.Time
+}
+
+// AppendStatement adds a statement to an account's log and trims the log to
+// MaxStatementsPerAccount, dropping the oldest. The sequence number is assigned
+// per account inside the transaction, so it is monotonic for readers and says
+// nothing about any other account's activity.
+func (s *Store) AppendStatement(ctx context.Context, accountID string, blob []byte) (*Statement, error) {
+	if len(blob) == 0 {
+		return nil, fmt.Errorf("statement: empty")
+	}
+	if len(blob) > MaxStatementBytes {
+		return nil, ErrStatementTooLarge
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	var next int64
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(seq), 0) + 1 FROM statements WHERE account_id=?`, accountID,
+	).Scan(&next); err != nil {
+		return nil, err
+	}
+	created := nowStr()
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO statements (account_id, seq, blob, created) VALUES (?, ?, ?, ?)`,
+		accountID, next, blob, created,
+	); err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM statements WHERE account_id=? AND seq <= ?`,
+		accountID, next-MaxStatementsPerAccount,
+	); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	t, _ := time.Parse(time.RFC3339, created)
+	return &Statement{Seq: next, Blob: blob, Created: t}, nil
+}
+
+// ListStatements returns an account's statements with seq greater than since,
+// oldest first. A reader polls with the highest seq it has; a gap means entries
+// were trimmed or withheld, which the PRD is explicit that signing cannot
+// prevent.
+func (s *Store) ListStatements(ctx context.Context, accountID string, since int64) ([]Statement, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT seq, blob, created FROM statements WHERE account_id=? AND seq > ? ORDER BY seq`,
+		accountID, since,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Statement
+	for rows.Next() {
+		var st Statement
+		var created string
+		if err := rows.Scan(&st.Seq, &st.Blob, &created); err != nil {
+			return nil, err
+		}
+		st.Created, _ = time.Parse(time.RFC3339, created)
+		out = append(out, st)
+	}
+	return out, rows.Err()
 }

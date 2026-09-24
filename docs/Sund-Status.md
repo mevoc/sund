@@ -272,11 +272,11 @@ privacy documentation has to describe today.
   small — Sund does not claim traffic-analysis resistance; it guarantees the
   graph is not *recorded*.
 - **Any device in the account** observes, from `GET /v1/devices`: every peer's
-  `public_key`, `push_endpoint`, `capabilities`, `created`, `last_seen` and
-  whether it is revoked. Two of those are worth naming to a privacy writer.
-  `push_endpoint` is a peer's wake-up URL, which on a bearer-URL distributor such
-  as a default ntfy topic is a capability to wake or spam that device, outside
-  Sund and beyond revocation. `last_seen` updates on authenticated
+  `public_key`, `role`, `capabilities`, `created`, `last_seen` and whether it is
+  revoked. Two per-device fields are withheld: `push_endpoint` comes back only to
+  the device that set it (a peer's wake-up URL is a capability over it, not a
+  fact about it), and `quota_bytes` only to the device it caps. `last_seen` is
+  the one worth naming to a privacy writer: it updates on authenticated
   *management-plane* requests only — the transport plane leaves it alone — but
   since clients refetch the device list on every ping, and a ping fires on
   message arrival, it approximates when a peer's client last woke.

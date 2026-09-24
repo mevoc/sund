@@ -134,21 +134,35 @@ type deviceView struct {
 	// Role is peer-readable on purpose: authority over other devices must be
 	// visible to the devices it is held over. Contrast quota_bytes, which is
 	// deliberately absent (PRD, decision 16).
-	Role         string `json:"role"`
-	PublicKey    string `json:"public_key"` // base64 (standard)
-	PushEndpoint string `json:"push_endpoint"`
+	Role      string `json:"role"`
+	PublicKey string `json:"public_key"` // base64 (standard)
+	// PushEndpoint is returned only for the calling device, and omitted for
+	// peers. A wake-up URL is not a fact about a device, it is a capability over
+	// it: on a bearer-URL distributor such as a default ntfy topic, holding a
+	// peer's endpoint is the ability to wake or spam that device — outside Sund
+	// entirely, and beyond the reach of revocation or quota. No client needs a
+	// peer's endpoint (pings are the server's to send), so publishing it bought
+	// nothing and sold that. A device may still read back its own, which is a
+	// diagnostic and confers nothing over anyone (PRD, decision 20).
+	PushEndpoint string `json:"push_endpoint,omitempty"`
 	Capabilities string `json:"capabilities"`
 	Created      string `json:"created"`
 	LastSeen     string `json:"last_seen"`
 	Revoked      bool   `json:"revoked"`
 }
 
-func toDeviceView(d store.Device) deviceView {
+// toDeviceView renders a device for the list. callerID is the device asking, so
+// that its own push endpoint comes back while its peers' do not.
+func toDeviceView(d store.Device, callerID string) deviceView {
+	endpoint := ""
+	if d.ID == callerID {
+		endpoint = d.PushEndpoint
+	}
 	return deviceView{
 		ID:           d.ID,
 		Role:         d.Role,
 		PublicKey:    base64.StdEncoding.EncodeToString(d.PublicKey),
-		PushEndpoint: d.PushEndpoint,
+		PushEndpoint: endpoint,
 		Capabilities: d.Capabilities,
 		Created:      d.Created.UTC().Format(time.RFC3339),
 		LastSeen:     d.LastSeen.UTC().Format(time.RFC3339),
@@ -277,7 +291,7 @@ func (s *Server) handleListDevices(w http.ResponseWriter, r *http.Request) {
 
 	views := make([]deviceView, len(devs))
 	for i, d := range devs {
-		views[i] = toDeviceView(d)
+		views[i] = toDeviceView(d, dev.ID)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"devices": views})
 }

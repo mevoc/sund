@@ -27,7 +27,10 @@ type DeviceInfo struct {
 	// other devices has to be visible to the devices it is held over, which is
 	// the consumer's half of "no silent administration" (PRD, decision 12).
 	// Sund publishes the field and cannot make a client render it.
-	Role         string
+	Role string
+	// PushEndpoint is populated only for the calling device. A peer's wake-up URL
+	// is a capability over it, not a fact about it, so the server withholds it
+	// (PRD, decision 20).
 	PushEndpoint string
 	Capabilities string
 	Created      time.Time

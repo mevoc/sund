@@ -2,7 +2,7 @@ Sund
 
 «A blind strait between your devices.»
 
-Status: PRD v0.9 (Draft) — supersedes PRD 0.8
+Status: PRD v0.10 (Draft) — supersedes PRD 0.9
 
 > Working name: **Sund** (Swedish: a strait between islands — the channel between
 > skerries; also "sound, healthy"). The kernel extracted from Skerry
@@ -513,8 +513,16 @@ Messages
 - Payloads are opaque ciphertext, bounded by both quota levels (Accounts).
 
 Push wake-up
-- A ping carries nothing — no payload, no queue ID. It only tells a device
-  "check in"; the client then drains its queues over the API.
+- A ping carries no payload and no queue ID. It tells a device "check in"; the
+  client then drains its queues over the API.
+- A ping does carry one bit, and 0.10 states it because the code has sent it
+  since the beginning: a **priority hint**. A send may set `priority: true`,
+  which the server forwards to the pinger as an opaque high/normal flag without
+  reading the payload — on UnifiedPush it becomes ntfy's `Priority: high` header.
+  It exists because an Android device in Doze will not wake for a normal-priority
+  push, so without it an SOS is not deliverable at all. The body stays empty and
+  no queue ID travels, but "a ping carries nothing" was never true, and what the
+  bit discloses is listed under Threat model → residual metadata.
 - Pings are sent on message arrival (transport plane, via queue ownership) and on
   every administrative act — registration, revocation, role change, invitation
   minting, and a storage-ceiling change (management plane, see Devices). A mint
@@ -633,8 +641,10 @@ choice belongs before onboarding, not after.
 
 Push architecture
 
-Pings are payload-free by design (no content, no queue IDs — only "check in").
-That decision is what makes the following delivery paths acceptable.
+Pings are payload-free by design (no content, no queue IDs — only "check in",
+plus the one-bit priority hint of Scope → Push wake-up). That decision is what
+makes the following delivery paths acceptable, and the hint is the one part of it
+a consumer must weigh rather than assume away.
 
 Android — fully self-hostable.
 
@@ -738,6 +748,14 @@ here enables anything it could not already do):
   error path is not content-free: a failed push ping logs the transport error,
   which carries the device's push endpoint URL. Host-observable only, so it
   enables nothing the host did not already hold.
+- The priority hint on a ping. A send may mark itself urgent, and the server
+  forwards that as an opaque flag. So a host sees, per wake-up, whether the
+  sender called it urgent — and in a consumer that reserves urgency for one thing,
+  that is a label on the event. In family-beacon's shape, timing plus the flag
+  distinguishes an SOS from a location update without reading a byte of either.
+  *Enables:* nothing a host can act on beyond what selective delay already gives
+  it, but it is the single most content-revealing bit in the system and the one a
+  consumer's privacy documentation most needs to name.
 - Per-queue ceilings: `queues.quota_bytes` tells a host what tolerance a
   recipient has configured for each channel it owns. Owner-written, tiny, and it
   says nothing the host could not infer from watching that queue refuse.
@@ -837,10 +855,21 @@ member, or may hold no account on the server at all (decision 15):
   account has ejected, and a consumer reasoning about what a departed member can
   infer should know it.
 
-Observable by the **vendor push gateway and Apple**, on iOS only:
+Observable by the **push distributor**, and on iOS additionally by the **vendor
+gateway and Apple**:
 
-- Wake timing, and nothing else — no content, no queue ids, no message counts
-  per queue. See Push architecture.
+- Wake timing per endpoint, and the priority hint. No content, no queue ids, no
+  message counts per queue. On Android the distributor may be self-hosted next to
+  Sund, in which case this observer collapses into the host; a consumer using a
+  third-party distributor should count it separately. On iOS it cannot collapse —
+  the gateway and Apple are always distinct parties, and they see the same two
+  things. See Push architecture.
+- *Enables:* for a consumer that reserves the urgent flag for one event type,
+  a party who sees only timing and priority can still tell that event apart from
+  ordinary traffic. Sund cannot prevent this — the flag is what makes the event
+  deliverable through Doze at all — so it is the consumer's to weigh: reserve
+  urgency for a class of events rather than one, or accept that the class is
+  visible to its push path.
 
 What an account is, and is not. An account bounds the management plane — a
 device lists, fetches bundles from and revokes only within its own account — plus
@@ -1265,6 +1294,20 @@ stack lock and the second transport-trust mode. Item 12 came in 0.4, item 13 in
     against "it stores briefly (TTL)" for a threat the owner can already end by
     retiring the queue. Revisit if a consumer shows the annoyance case matters
     more than the retained metadata costs.
+18. The priority hint is stated, not removed. A ping has always carried one bit
+    beyond "check in": a send may mark itself urgent and the server forwards that
+    to the pinger as an opaque flag, becoming ntfy's `Priority: high`. The PRD
+    said "a ping carries nothing" and the guide's S4 has been testing the flag
+    since the test strategy was written, so the spec was the only thing that did
+    not know. Kept, because without it an Android device in Doze does not wake and
+    an SOS is not deliverable at all — the feature is load-bearing for the
+    consumer the whole design is aimed at. Now disclosed instead: it is the single
+    most content-revealing bit in the system, because a consumer that reserves
+    urgency for one event type has, in effect, labelled that event to its host and
+    its push path. The mitigation is the consumer's and is stated as such —
+    reserve urgency for a class of events rather than one — because Sund cannot
+    fix it without making the event undeliverable. Closes the 2026-09-18
+    deviation.
 
 Open decisions remaining
 

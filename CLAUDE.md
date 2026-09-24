@@ -54,10 +54,15 @@ intent.
 
 ## Docs
 
-- `docs/Sund-PRD.md` — **current (v0.9).** Two-plane architecture, pseudonymous
+- `docs/Sund-PRD.md` — **current (v0.10).** Two-plane architecture, pseudonymous
   queues, device list/revocation/key bundles, push architecture (UnifiedPush/ntfy
   on Android; vendor APNS gateway on iOS — pluggable provider interface),
-  fingerprint-pinned server address, one-binary stack requirement. New in 0.9:
+  fingerprint-pinned server address, one-binary stack requirement. New in 0.10:
+  the wake-up **priority hint** is stated rather than denied (decision 18) — a
+  ping has always carried one bit beyond "check in", and in family-beacon's shape
+  timing plus that bit distinguishes an SOS from a location update. Kept, because
+  an Android device in Doze will not wake without it; disclosed, because "a ping
+  carries nothing" was false. From 0.9:
   a per-queue storage ceiling (decision 17) — the sender bound the threat model
   said it lacked, reached from the other side: a recipient mints one queue per
   peer, so capping the queue caps the peer without the server learning who it is.

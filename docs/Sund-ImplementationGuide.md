@@ -1,7 +1,11 @@
 Sund — Implementation Guide
 
-Status: v0.7 (Draft) — companion to Sund-PRD.md
+Status: v0.8 (Draft) — companion to Sund-PRD.md
 
+> New in 0.8: S4's priority assertion is reconciled with PRD 0.10's decision 18 —
+> the flag this scenario has tested all along is now something the PRD admits a
+> ping carries.
+>
 > New in 0.7: PRD 0.9's decision 17 — a per-queue storage ceiling, set by the
 > queue's owner on the transport plane. Adds `POST /v1/quota/{recipient_id}`
 > beside the other recipient-key operations, a third bound on the append check,
@@ -504,7 +508,10 @@ S3 Offline receiver — send while the "child's phone" is down; drain after it
    returns; a second message with a short TTL expires unread and is gone.
 S4 Wake-up — a stub UnifiedPush distributor (an in-test HTTP handler) receives
    the ping; assert the ping body is empty: no payload, no queue ID, nothing.
-   SOS is the same assertion plus the priority flag.
+   SOS is the same assertion plus the priority flag — which is the one thing a
+   ping does carry beyond "check in" (PRD 0.10, decision 18), so assert both
+   halves: the body is empty *and* the header distinguishes urgent from normal,
+   since a consumer's privacy documentation has to describe the second.
 S5 Stolen phone — revoke a device: its signed requests fail, its owned queues
    are gone, peers see the device-list change (ping + refetch), rotate their
    queues and re-key; the revoked client's cached credentials open nothing.

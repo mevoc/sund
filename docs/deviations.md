@@ -1,6 +1,6 @@
 # Sund — deviations from the PRD and implementation guide
 
-Where the code, the guide or an issue departs from `Sund-PRD.md` (v0.9) or
+Where the code, the guide or an issue departs from `Sund-PRD.md` (v0.10) or
 `Sund-ImplementationGuide.md` (v0.7), it is recorded here at the time the departure
 is made. Open entries are the agenda for the next spec revision; a revision closes
 them by updating `Status`. Format and rules: `~/projects/CLAUDE.md`, *Design flow*.
@@ -61,10 +61,16 @@ CI). Those are tracked in `Sund-Status.md` → "Not built yet".
 - Why: an SOS must wake an Android device through Doze, which needs a high-priority
   push. The guide's scenario S4 already tests "the priority flag"; the PRD does not
   mention it.
-- Status: open. The PRD should state the flag and add it to the residual metadata
-  list: the host, the UnifiedPush distributor and (on iOS) the gateway and Apple learn
-  which wake-ups are urgent, which in a family-beacon deployment means they can tell
-  an SOS from a location update by timing plus priority.
+- Status: folded into `Sund-PRD.md` v0.10 (decision 18). Scope → Push wake-up now
+  states the bit instead of claiming a ping carries nothing; Push architecture is
+  corrected in the same way; and the residual-metadata list gains it twice — once
+  under the host, once under a push-distributor observer group that 0.8's
+  restructuring had folded into the iOS gateway. The consequence this entry named
+  is stated in the PRD's own words: in family-beacon's shape, timing plus the flag
+  distinguishes an SOS from a location update without reading a byte. Kept rather
+  than removed because without it an Android device in Doze never wakes, so the
+  mitigation is the consumer's — reserve urgency for a class of events rather than
+  one — and the PRD says so.
 
 ## 2026-09-18 — The schema has columns the PRD's "whole" data model does not
 

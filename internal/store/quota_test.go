@@ -13,11 +13,11 @@ import (
 func seedQueueWithQuota(t *testing.T, st *Store, quotaBytes int64) *Queue {
 	t.Helper()
 	ctx := context.Background()
-	acc, err := st.CreateAccount(ctx, "test", quotaBytes)
+	acc, err := st.CreateAccount(ctx, "test", quotaBytes, AdminModeFlat)
 	if err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
-	token, _, err := st.CreateInvitation(ctx, acc.ID, 15*time.Minute)
+	token, _, err := st.CreateInvitation(ctx, acc.ID, 15*time.Minute, RoleAdmin)
 	if err != nil {
 		t.Fatalf("CreateInvitation: %v", err)
 	}
@@ -113,14 +113,14 @@ func TestQuotaZeroMeansUnlimited(t *testing.T) {
 	// so upgrading a database never retroactively blocks existing accounts.
 	st := newStore(t)
 	ctx := context.Background()
-	acc, err := st.CreateAccount(ctx, "standard", 0)
+	acc, err := st.CreateAccount(ctx, "standard", 0, AdminModeFlat)
 	if err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
 	if _, err := st.db.ExecContext(ctx, `UPDATE accounts SET quota_bytes=0 WHERE id=?`, acc.ID); err != nil {
 		t.Fatalf("simulate migrated account: %v", err)
 	}
-	token, _, err := st.CreateInvitation(ctx, acc.ID, 15*time.Minute)
+	token, _, err := st.CreateInvitation(ctx, acc.ID, 15*time.Minute, RoleAdmin)
 	if err != nil {
 		t.Fatalf("CreateInvitation: %v", err)
 	}

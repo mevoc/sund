@@ -29,11 +29,11 @@ func newServer(t *testing.T) (*Conn, func() string) {
 	srv := httptest.NewServer(server.New(server.Config{Version: "test"}, st).Handler())
 	t.Cleanup(srv.Close)
 	token := func() string {
-		acc, err := st.CreateAccount(context.Background(), "standard", 0)
+		acc, err := st.CreateAccount(context.Background(), "standard", 0, store.AdminModeFlat)
 		if err != nil {
 			t.Fatalf("CreateAccount: %v", err)
 		}
-		tok, _, err := st.CreateInvitation(context.Background(), acc.ID, time.Minute)
+		tok, _, err := st.CreateInvitation(context.Background(), acc.ID, time.Minute, store.RoleAdmin)
 		if err != nil {
 			t.Fatalf("CreateInvitation: %v", err)
 		}

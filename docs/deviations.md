@@ -276,3 +276,38 @@ CI). Those are tracked in `Sund-Status.md` → "Not built yet".
   `tests/test_revocation.py::test_revoke_pings_the_target_too`, which gives the
   target and its peer distinct sink paths and asserts both are woken — it fails
   against the previous code, which is the point of writing it this way.
+
+## 2026-09-24 — Bootstrap admin is the first device *ever*, not the first live one
+
+- Spec: `Sund-PRD.md` → Devices → Roles and administration — "The first device of
+  an account is always an admin"; Devices → Invitations — "A token also carries
+  the role its bearer will hold, so a device never exists in an account before
+  its role is settled."
+- Actual: `RegisterDevice` forces `admin` only when the account has never had a
+  device (`COUNT(*)`, not `COUNT(*) WHERE revoked=0`). A first draft counted live
+  devices, which meant a managed account whose devices had all been revoked would
+  enrol the *next* device as an admin even from a token that granted `member`.
+- Why: that is a privilege escalation through a token which says otherwise, and a
+  second recovery path from the stranded state with weaker authorization than the
+  operator's `sund admin device promote`. Bootstrap is for an account that has
+  never had a device; recovery is the operator's command.
+- Status: closed at the time of writing — the code implements the narrower rule
+  and the PRD sentence is true of it. Recorded because the wider reading is the
+  natural one and someone will re-derive it: "first device" means first ever.
+
+## 2026-09-24 — `grants_role` is normalised to `admin` in a flat account
+
+- Spec: `Sund-PRD.md` → Devices → Roles and administration — "in a `flat` account
+  every device registers as an admin"; Threat model, residual metadata —
+  "`grants_role` says at mint time that an account is about to add an admin
+  rather than a member."
+- Actual: `CreateInvitation` rewrites `grants_role` to `admin` when the account is
+  flat, rather than storing the requested value unused. The guide had said the
+  field is "ignored in a flat one", which left a row whose `grants_role` said
+  `member` while its bearer would enrol as `admin`.
+- Why: the threat-model bullet above leans on the column meaning something to
+  anyone reading the schema, including the host. A stored value that contradicts
+  the role it produces is worse than no value.
+- Status: closed at the time of writing. Flagged rather than silent because it is
+  a write the caller did not ask for: a flat account's invitation list will show
+  `admin` whatever the client sent.

@@ -158,10 +158,71 @@ func runAdmin(args []string) error {
 		return runAdminAccountCreate(args[2:])
 	case len(args) >= 2 && args[0] == "device" && args[1] == "quota":
 		return runAdminDeviceQuota(args[2:])
+	case len(args) >= 2 && args[0] == "device" && args[1] == "promote":
+		return runAdminDevicePromote(args[2:])
 	}
 	return fmt.Errorf("usage:\n" +
-		"  sund admin account create [--db sund.db] [--quota standard] [--ttl 15m] [--json]\n" +
-		"  sund admin device quota <device-id> [<bytes>] [--db sund.db]")
+		"  sund admin account create [--db sund.db] [--quota standard] [--admin-mode flat] [--ttl 15m] [--json]\n" +
+		"  sund admin device quota <device-id> [<bytes>] [--db sund.db]\n" +
+		"  sund admin device promote <device-id> [--db sund.db]")
+}
+
+// runAdminDevicePromote makes a device an admin. It is the operator's way back
+// into a managed account whose only admin left — the invariant stops an account
+// losing its last admin to an act on ANOTHER device, but a device may always
+// revoke itself, so the bad state stays reachable by design (PRD, decision 12).
+func runAdminDevicePromote(args []string) error {
+	fs := flag.NewFlagSet("admin device promote", flag.ExitOnError)
+	dbPath := fs.String("db", envOr("SUND_DB", "sund.db"), "path to the SQLite database file (env: SUND_DB)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() < 1 {
+		return fmt.Errorf("usage: sund admin device promote <device-id> [--db sund.db]")
+	}
+	deviceID := fs.Arg(0)
+
+	st, err := store.Open(*dbPath)
+	if err != nil {
+		return fmt.Errorf("open db: %w", err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+
+	dev, err := st.GetDevice(ctx, deviceID)
+	if err != nil {
+		return fmt.Errorf("device %s: %w", deviceID, err)
+	}
+	if err := st.PromoteDevice(ctx, deviceID); err != nil {
+		return fmt.Errorf("promote: %w", err)
+	}
+
+	// A role change is an administrative act. This one has no acting device, so
+	// it pings every device in the account rather than all-but-the-actor: the
+	// host is the one party none of this binds, so it must not hold the only
+	// silent act.
+	pingAccount(ctx, st, dev.AccountID, "")
+	fmt.Printf("%s: promoted to admin\n", deviceID)
+	return nil
+}
+
+// pingAccount wakes every device in an account except exceptID (empty for an
+// operator act, which has no actor to exclude).
+func pingAccount(ctx context.Context, st *store.Store, accountID, exceptID string) {
+	devs, err := st.ListDevices(ctx, accountID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not list devices to ping: %v\n", err)
+		return
+	}
+	pinger := push.NewUnifiedPush(&http.Client{Timeout: 10 * time.Second})
+	for _, d := range devs {
+		if d.ID == exceptID || d.Revoked || d.PushEndpoint == "" {
+			continue
+		}
+		if err := pinger.Ping(ctx, d.PushEndpoint, push.Normal); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not ping %s: %v\n", d.ID, err)
+		}
+	}
 }
 
 // runAdminDeviceQuota sets or shows a device's storage ceiling. It is the
@@ -237,6 +298,8 @@ func runAdminAccountCreate(args []string) error {
 	dbPath := fs.String("db", envOr("SUND_DB", "sund.db"), "path to the SQLite database file (env: SUND_DB)")
 	quota := fs.String("quota", "standard", "account quota class")
 	quotaBytes := fs.Int64("quota-bytes", 0, "explicit storage quota in bytes (0 = class default)")
+	adminMode := fs.String("admin-mode", store.AdminModeFlat,
+		"administration mode: flat (every device an admin) or managed (admin-only revoke/invite); fixed at provisioning")
 	ttl := fs.Duration("ttl", 15*time.Minute, "invitation time-to-live")
 	asJSON := fs.Bool("json", false, "emit machine-readable JSON")
 	if err := fs.Parse(args); err != nil {
@@ -250,11 +313,13 @@ func runAdminAccountCreate(args []string) error {
 	defer st.Close()
 
 	ctx := context.Background()
-	acc, err := st.CreateAccount(ctx, *quota, *quotaBytes)
+	acc, err := st.CreateAccount(ctx, *quota, *quotaBytes, *adminMode)
 	if err != nil {
 		return fmt.Errorf("create account: %w", err)
 	}
-	token, _, err := st.CreateInvitation(ctx, acc.ID, *ttl)
+	// The first device of an account is an admin whatever the mode, so the
+	// founding invitation grants admin explicitly.
+	token, _, err := st.CreateInvitation(ctx, acc.ID, *ttl, store.RoleAdmin)
 	if err != nil {
 		return fmt.Errorf("create invitation: %w", err)
 	}
@@ -265,7 +330,7 @@ func runAdminAccountCreate(args []string) error {
 			"invitation_token": token,
 		})
 	}
-	fmt.Printf("account:    %s\n", acc.ID)
+	fmt.Printf("account:    %s  (administration: %s)\n", acc.ID, acc.AdminMode)
 	fmt.Printf("invitation: %s  (single-use, expires in %s)\n", token, *ttl)
 	return nil
 }

@@ -1,9 +1,9 @@
 Sund — Implementation Status
 
 Status: v0.1 (snapshot of the code at the storage-quota commit, 2026-07-20;
-"Not built yet", the schema block and multi-tenancy refreshed against PRD 0.10
-on 2026-09-24, when the three quota levels were built) — describes the code, not
-the plan
+"Not built yet", the schema block, multi-tenancy and administration refreshed
+against PRD 0.11 on 2026-09-24, when the three quota levels and the account
+administration model were built) — describes the code, not the plan
 
 This is a snapshot of what the Sund binary actually does as of the three-level
 quota commit, written for the people who build on it — chiefly family-beacon
@@ -20,13 +20,14 @@ At a glance
   binary, one database file. Go 1.25+ (floor set by the driver).
 - Both planes are implemented: a management plane (device identity) and a
   transport plane (pseudonymous blind queues).
-- Also built: push wake-up, device revocation, and storage quota at all three
-  levels — account, device and queue (PRD 0.10, decisions 13, 16 and 17).
+- Also built: push wake-up, device revocation, storage quota at all three levels
+  (account, device, queue — decisions 13, 16, 17), and the account
+  administration model (flat/managed accounts and device roles, decision 12).
 - Tests: a Go unit suite and a Python system suite (`beaconsim`) that drives the
-  real compiled binary with real crypto. ~94 Go cases, 53 system tests, both
+  real compiled binary with real crypto. 80 Go tests (99 with subtests) and
+  61 system tests, both
   per-commit. Includes the blindness audit (S8) and operator-survival (S9).
-- Not yet built: the account administration model of PRD 0.4 (administration
-  modes, device roles), iOS push provider, metrics. TLS/fingerprint pinning is
+- Not yet built: iOS push provider, metrics. TLS/fingerprint pinning is
   implemented as an opt-in mode (`serve --tls-dir`); making it the default is a
   follow-up. See "Not built yet".
 
@@ -55,12 +56,13 @@ metadata.
 
 Data model (actual SQLite schema)
 
-    accounts     id, created, quota (class label), status, quota_bytes
+    accounts     id, created, quota (class label), status, quota_bytes,
+                 admin_mode
     devices      id, account_id, public_key, push_endpoint, capabilities,
-                 created, last_seen, revoked, quota_bytes
+                 created, last_seen, revoked, quota_bytes, role
     bundles      device_id (pk), blob (opaque, size-capped), updated
     invitations  token_hash (pk), id, account_id, created, expires, consumed,
-                 revoked
+                 revoked, grants_role
     queues       recipient_id (pk), sender_id, owner_device, recipient_key,
                  sender_key (null until bound), created, retired, quota_bytes
     messages     seq (autoincrement), id, queue_id (= a queue's recipient_id),
@@ -90,6 +92,7 @@ HTTP API (implemented endpoints)
     POST /v1/devices/register          one-time token          enroll (bootstrap)
     GET  /v1/devices                   device signature        list account devices
     POST /v1/devices/{id}/revoke       device signature        revoke a device
+    POST /v1/devices/{id}/role         device signature        promote/demote (admin)
     POST /v1/invitations               device signature        mint a pairing token
     GET  /v1/invitations               device signature        list outstanding invitations
     POST /v1/invitations/{id}/revoke   device signature        revoke before use
@@ -146,7 +149,11 @@ Behavior details a consumer should know
   indefinitely (PRD 0.11, decision 19).
 - Push wake-up: a ping carries nothing (no payload, no queue id) — only "check
   in". Pings fire on message arrival (queue → owner) and on device-list changes
-  (registration and revocation → the account's other devices), asynchronously so
+  (registration, revocation, role change and invitation minting → the account's
+  other devices, excluding the one that performed the act; a revocation
+  additionally pings its target, and `sund admin device promote` pings every
+  device, having no actor to exclude; a storage-ceiling change pings only the
+  capped device), asynchronously so
   a slow distributor never blocks the API. A per-message `priority` flag is an
   opaque hint the server forwards to the pinger without reading the payload
   (used for SOS). Provider is pluggable (`internal/push`); UnifiedPush/ntfy is
@@ -156,14 +163,35 @@ Behavior details a consumer should know
   device's signed requests then fail and its queues 404. The account's other
   devices are pinged to refetch and rotate, and so is the revoked device itself —
   its endpoint is captured before revocation clears it, so it learns rather than
-  going quiet (family-beacon's roster requires this). **Any device in an account may revoke
-  any other, including itself** — the binary has no role model. PRD 0.4 adds an
-  optional per-account administration model (flat/managed accounts,
-  `admin`/`member` roles) on top of this; none of it is implemented, so a consumer
-  must not rely on a revocation being gated today. As built, the behaviour is
-  exactly PRD 0.4's `flat` mode, which is also what family-beacon's roster spec
-  requires. A revoked device stays listed, flagged
-  revoked.
+  going quiet (family-beacon's roster requires this). Who may revoke depends on
+  the account's administration mode — see below. A revoked device stays listed,
+  flagged revoked.
+- Administration: an account is `flat` or `managed`, chosen at
+  `sund admin account create --admin-mode` and not changeable afterwards (no
+  endpoint, which is the whole specification). Each device holds a role,
+  `admin` or `member`.
+  - **flat** (the default) is PRD 0.3 behaviour: every device registers as an
+    admin, so every device may revoke any other and mint invitations. This is
+    what family-beacon's roster spec requires, and `POST /v1/devices/{id}/role`
+    is refused with 409 in a flat account — there is nothing to promote, and no
+    walking a flat account into a managed one one demotion at a time.
+  - **managed** restricts revoking *another* device, minting an invitation and
+    changing a role to admins (403 otherwise). A device registers with the role
+    its invitation granted (`grants_role`, default member), except the account's
+    first device, which is always an admin.
+  - **A device may always revoke itself**, whatever its role, including the last
+    admin. It is the only remedy a member has against an admin.
+  - **An account never loses its last admin to an act performed on another
+    device**: demoting or revoking the sole admin is refused with 409 while other
+    devices remain. Enforced inside the revocation's transaction, so two admins
+    revoking each other concurrently cannot both succeed.
+  - `sund admin device promote <device-id>` is the operator's way back into a
+    managed account whose only admin left — reachable by design, since
+    self-revocation has no exception. It pings every device, having no actor to
+    exclude.
+  - `role` is in the device-list response, deliberately: authority over other
+    devices must be visible to the devices it is held over. Contrast
+    `quota_bytes`, which is not (decision 16).
 - Quota: three ceilings, all counted on the owner (recipient) side — the
   account's, the owning device's, and the queue's. A send is refused with 507 if
   it would take *any* of them past its limit; the boundary is inclusive, so
@@ -261,9 +289,11 @@ privacy documentation has to describe today.
 
 Consuming apps must state this honestly.
 
-Trust boundary: every non-revoked device in an account is trusted equally — as
-built, that includes the administrative acts (revoking a device, minting an
-invitation), which PRD 0.4 gates behind a role but the binary does not. The
+Trust boundary: in a **flat** account every non-revoked device is trusted
+equally, administrative acts included — any device may revoke any other and mint
+invitations. In a **managed** account those two acts and role changes are
+admin-only, while listing, revoking an outstanding invitation and self-revocation
+stay open to every device. The
 device list is visible to all members, and the server enforces no "which member
 may reach which" policy (nor will it — that one is the consumer's by design).
 If a consumer publishes reachable key bundles, any member device can initiate to
@@ -306,6 +336,16 @@ contract:
 7. Receiving: sign with the recipient key; decrypt locally; ack by message id.
 8. Rotation: periodically retire a queue and create a replacement.
 9. Device list: `GET /v1/devices`; refetch on wake and before any new pairing.
+10. Administration, the half Sund cannot verify: **render each device's `role`**
+    and **surface an administrative change** to the user rather than absorbing
+    the ping. A client that does neither is still contract-conformant and
+    administers covertly — which is exactly what makes a managed account
+    acceptable or not, so it is the consumer's obligation and stated here
+    because this list is where a client implementer works (PRD, decision 12).
+11. Refetch on any ping: the device list, the invitation list **and**
+    `GET /v1/me/quota`. A ping carries nothing, so a woken client cannot tell
+    which act fired it, and a storage-ceiling change is visible only through the
+    quota read.
 
 Payload encryption is entirely the client's concern. beaconsim uses X25519
 SealedBox as a stand-in; family-beacon's real session crypto (double-ratchet or
@@ -336,19 +376,6 @@ Run both with `make test-all`.
 
 Not built yet (relative to the PRD / API sketch)
 
-- Account administration (PRD 0.4, decision 12): `accounts.admin_mode`,
-  `devices.role`, `invitations.grants_role`, `POST /v1/devices/{id}/role`, the
-  admin-only checks on revoke and invitation minting, the last-admin invariant,
-  `sund admin account create --admin-mode` and `sund admin device promote`, role
-  in the device-list response, and the two new ping triggers (a role change and
-  an invitation mint must wake the account's other devices; today only
-  registration and revocation do). It also adds a client obligation Sund cannot
-  verify — a client MUST render each device's role and surface administrative
-  changes rather than absorbing the ping — which belongs in "What a client must
-  implement" once roles exist. Nothing of it exists: today every device is
-  effectively an admin, which is exactly PRD 0.4's `flat` mode, so implementing
-  it should be additive rather than a behaviour change for existing deployments
-  (an existing database migrates to `flat`).
 - Pinned TLS is opt-in, not the default: plain HTTP remains the flagless default
   and the container/compose still serve HTTP. Making pinned TLS the self-host
   default (and enabling it in the image) is a follow-up. Client pinning is proven
@@ -374,7 +401,9 @@ server API.
 
 Code map
 
-    main.go                 CLI: serve, admin account create, health, version;
+    main.go                 CLI: serve, admin account create (--admin-mode),
+                            admin device quota, admin device promote,
+                            health, version;
                             env-var config (SUND_ADDR/SUND_DB)
     Dockerfile, compose.yaml, .env.example
                             container image (distroless static, multi-arch) and a

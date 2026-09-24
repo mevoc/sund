@@ -21,9 +21,10 @@ Status: PRD v0.11 (Draft) — supersedes PRD 0.10
 > restructured by observer *and by what observing enables*, and what sharing an
 > account costs two co-located server components.
 >
-> Nothing in 0.4 through 0.9 is implemented: decisions 12, 13, 16 and 17 all sit
-> in `Sund-Status.md` → "Not built yet", which is why each has cost nothing to
-> revise as the next one exposed a flaw in the last.
+> Decisions 12, 13, 16 and 17 were unimplemented while 0.4 through 0.9 were
+> written, which is why each cost nothing to revise as the next exposed a flaw in
+> the last. They are built as of 2026-09-24; `Sund-Status.md` is the ground truth
+> for what the binary does.
 
 ---
 
@@ -573,11 +574,10 @@ existed — which is what makes all three quota levels additive rather than a
 migration.
 
 This table is design intent, and the promise attached to it runs one way: every
-column the implementation actually has appears here. Not the converse — four
-columns listed above are specified and unbuilt (`accounts.admin_mode`,
-`devices.role`, `invitations.grants_role` from 0.4, `devices.quota_bytes` from
-0.5 and `queues.quota_bytes` from 0.9), and `Sund-Status.md` → "Not built yet"
-tracks that gap. The one-way promise
+column the implementation actually has appears here. Not the converse: a column
+may be specified before it is built, and `Sund-Status.md` is where that gap is
+tracked. (As of 2026-09-24 there is no gap — `admin_mode`, `role`, `grants_role`
+and both `quota_bytes` columns are all in the schema.) The one-way promise
 had lapsed and is repaired here: the accounts, invitations and messages rows were
 out of step with `internal/store/store.go` (recorded in `docs/deviations.md`,
 2026-09-18). `seq` gives a stable per-queue delivery order at second-precision
@@ -955,9 +955,11 @@ exist. `managed` mode (decision 12) narrows revocation and minting to admins and
 is the right shape for a service account — the components are not people and
 there is nobody to trap — but the mode is fixed at provisioning, so it is a
 choice at account creation and not a fix an existing deployment can adopt.
-Per-device ceilings (decision 13) are the containment for the shared-quota cost.
-**Neither is implemented** (`Sund-Status.md` → "Not built yet"), so a stack
-deploying today carries all four costs undiminished.
+Per-device ceilings (decision 13) are the containment for the shared-quota cost,
+and a per-queue ceiling (decision 17) bounds one peer within that. All are
+implemented as of 2026-09-24, so a stack deploying today can take the first cost
+off the table at provisioning and contain the second — but the mode is still a
+choice made once, at account creation.
 
 The honest answer to "should two components share an account?" is "yes, with
 those four costs, and provision the account managed if you can" — and a consumer

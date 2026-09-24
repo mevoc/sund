@@ -33,11 +33,11 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 func registerDevice(t *testing.T, srv *Server, st *store.Store) (deviceID string, priv ed25519.PrivateKey) {
 	t.Helper()
 	ctx := context.Background()
-	acc, err := st.CreateAccount(ctx, "standard", 0)
+	acc, err := st.CreateAccount(ctx, "standard", 0, store.AdminModeFlat)
 	if err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
-	token, _, err := st.CreateInvitation(ctx, acc.ID, 15*time.Minute)
+	token, _, err := st.CreateInvitation(ctx, acc.ID, 15*time.Minute, store.RoleAdmin)
 	if err != nil {
 		t.Fatalf("CreateInvitation: %v", err)
 	}

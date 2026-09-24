@@ -71,6 +71,7 @@ func New(cfg Config, st *store.Store) *Server {
 	// Signed management-plane routes.
 	mux.Handle("GET /v1/devices", s.requireSignature(http.HandlerFunc(s.handleListDevices)))
 	mux.Handle("POST /v1/devices/{id}/revoke", s.requireSignature(http.HandlerFunc(s.handleRevoke)))
+	mux.Handle("POST /v1/devices/{id}/role", s.requireSignature(http.HandlerFunc(s.handleSetRole)))
 	mux.Handle("GET /v1/devices/{id}/bundle", s.requireSignature(http.HandlerFunc(s.handleGetBundle)))
 	mux.Handle("PUT /v1/me/bundle", s.requireSignature(http.HandlerFunc(s.handleSetBundle)))
 	mux.Handle("POST /v1/invitations", s.requireSignature(http.HandlerFunc(s.handleCreateInvitation)))

@@ -50,7 +50,22 @@ type Account struct {
 	Quota      string
 	Status     string
 	QuotaBytes int64
+	// AdminMode is "flat" or "managed", fixed at provisioning (PRD decision 12).
+	AdminMode string
 }
+
+// Administration modes and device roles (PRD, decision 12).
+const (
+	// AdminModeFlat is the default: every device registers as an admin and may
+	// do everything, which is PRD 0.3 behaviour restated.
+	AdminModeFlat = "flat"
+	// AdminModeManaged restricts revoking another device, minting an invitation
+	// and changing a role to devices holding RoleAdmin.
+	AdminModeManaged = "managed"
+
+	RoleAdmin  = "admin"
+	RoleMember = "member"
+)
 
 // Device is one enrolled device. The server stores the public key only.
 type Device struct {
@@ -62,6 +77,10 @@ type Device struct {
 	Created      time.Time
 	LastSeen     time.Time
 	Revoked      bool
+	// Role is "admin" or "member". Unlike QuotaBytes this IS peer-readable:
+	// authority over other devices must be visible to the devices it is held
+	// over, which is what makes a managed account non-covert (PRD decision 12).
+	Role string
 	// QuotaBytes caps the stored payloads in the queues this device owns; 0 means
 	// no ceiling at this level. Deliberately absent from the device-list response
 	// a peer reads (PRD 0.10, decision 16): a ceiling constrains its own device
@@ -119,7 +138,12 @@ CREATE TABLE IF NOT EXISTS accounts (
   created     TEXT NOT NULL,
   quota       TEXT NOT NULL,
   status      TEXT NOT NULL DEFAULT 'active',
-  quota_bytes INTEGER NOT NULL DEFAULT 0
+  quota_bytes INTEGER NOT NULL DEFAULT 0,
+  -- 'flat' (every device registers as an admin, PRD 0.3 behaviour) or 'managed'
+  -- (devices register with the role their invitation granted). Fixed at
+  -- provisioning: there is no endpoint to change it, and that refusal is the
+  -- whole specification (PRD, decision 12).
+  admin_mode  TEXT NOT NULL DEFAULT 'flat'
 );
 -- id is a non-secret handle for listing and revoking an invitation; the token
 -- itself is never stored (only its hash) or returned after minting. revoked
@@ -131,7 +155,10 @@ CREATE TABLE IF NOT EXISTS invitations (
   created    TEXT NOT NULL,
   expires    TEXT NOT NULL,
   consumed   INTEGER NOT NULL DEFAULT 0,
-  revoked    INTEGER NOT NULL DEFAULT 0
+  revoked    INTEGER NOT NULL DEFAULT 0,
+  -- The role this token's bearer will hold, so a device never exists in an
+  -- account before its role is settled.
+  grants_role TEXT NOT NULL DEFAULT 'member'
 );
 CREATE INDEX IF NOT EXISTS idx_invitations_account ON invitations(account_id);
 CREATE TABLE IF NOT EXISTS devices (
@@ -143,7 +170,10 @@ CREATE TABLE IF NOT EXISTS devices (
   created       TEXT NOT NULL,
   last_seen     TEXT NOT NULL,
   revoked       INTEGER NOT NULL DEFAULT 0,
-  quota_bytes   INTEGER NOT NULL DEFAULT 0
+  quota_bytes   INTEGER NOT NULL DEFAULT 0,
+  -- 'admin' or 'member'. Authority over other devices, so unlike quota_bytes it
+  -- IS peer-readable: power must be visible to the devices it is held over.
+  role          TEXT NOT NULL DEFAULT 'admin'
 );
 CREATE INDEX IF NOT EXISTS idx_devices_account ON devices(account_id);
 
@@ -207,6 +237,18 @@ func migrate(db *sql.DB) error {
 	}
 	// Index on invitations.id must come after the column is guaranteed to exist.
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_invitations_id ON invitations(id)`); err != nil {
+		return err
+	}
+	// The administration model (PRD, decision 12). Defaults are chosen so an
+	// existing database migrates to `flat` with every device an admin, which is
+	// exactly the behaviour it had before the columns existed.
+	if err := ensureColumn(db, "accounts", "admin_mode", "TEXT NOT NULL DEFAULT 'flat'"); err != nil {
+		return err
+	}
+	if err := ensureColumn(db, "devices", "role", "TEXT NOT NULL DEFAULT 'admin'"); err != nil {
+		return err
+	}
+	if err := ensureColumn(db, "invitations", "grants_role", "TEXT NOT NULL DEFAULT 'member'"); err != nil {
 		return err
 	}
 	// The device and queue quota levels (PRD 0.9, decisions 13 and 17). 0 means no
@@ -289,9 +331,15 @@ func hashToken(token string) string {
 // CreateAccount inserts a new account. quotaClass is recorded as the account's
 // tier label; quotaBytes is the enforced storage ceiling, or 0/less to resolve
 // it from the class default.
-func (s *Store) CreateAccount(ctx context.Context, quotaClass string, quotaBytes int64) (*Account, error) {
+func (s *Store) CreateAccount(ctx context.Context, quotaClass string, quotaBytes int64, adminMode string) (*Account, error) {
 	if quotaBytes <= 0 {
 		quotaBytes = QuotaBytesForClass(quotaClass)
+	}
+	if adminMode == "" {
+		adminMode = AdminModeFlat
+	}
+	if adminMode != AdminModeFlat && adminMode != AdminModeManaged {
+		return nil, fmt.Errorf("admin mode: want %q or %q, got %q", AdminModeFlat, AdminModeManaged, adminMode)
 	}
 	id, err := newID("acc_")
 	if err != nil {
@@ -299,13 +347,16 @@ func (s *Store) CreateAccount(ctx context.Context, quotaClass string, quotaBytes
 	}
 	created := nowStr()
 	if _, err := s.db.ExecContext(ctx,
-		`INSERT INTO accounts (id, created, quota, status, quota_bytes) VALUES (?, ?, ?, 'active', ?)`,
-		id, created, quotaClass, quotaBytes,
+		`INSERT INTO accounts (id, created, quota, status, quota_bytes, admin_mode) VALUES (?, ?, ?, 'active', ?, ?)`,
+		id, created, quotaClass, quotaBytes, adminMode,
 	); err != nil {
 		return nil, err
 	}
 	t, _ := time.Parse(time.RFC3339, created)
-	return &Account{ID: id, Created: t, Quota: quotaClass, Status: "active", QuotaBytes: quotaBytes}, nil
+	return &Account{
+		ID: id, Created: t, Quota: quotaClass, Status: "active",
+		QuotaBytes: quotaBytes, AdminMode: adminMode,
+	}, nil
 }
 
 // Invitation is a pending enrollment invitation, identified by a non-secret id.
@@ -315,13 +366,16 @@ type Invitation struct {
 	AccountID string
 	Created   time.Time
 	Expires   time.Time
+	// GrantsRole is the role the bearer will hold, settled at mint so a device
+	// never exists in an account before its role does.
+	GrantsRole string
 }
 
 // CreateInvitation mints a single-use enrollment token for accountID, valid for
 // ttl. The plaintext token is returned once (to be shown to the operator or
 // handed to a pairing device); only its hash is stored. The returned Invitation
 // carries the non-secret id (for later listing/revoking) and the expiry.
-func (s *Store) CreateInvitation(ctx context.Context, accountID string, ttl time.Duration) (token string, inv *Invitation, err error) {
+func (s *Store) CreateInvitation(ctx context.Context, accountID string, ttl time.Duration, grantsRole string) (token string, inv *Invitation, err error) {
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return "", nil, err
@@ -331,17 +385,37 @@ func (s *Store) CreateInvitation(ctx context.Context, accountID string, ttl time
 	if err != nil {
 		return "", nil, err
 	}
+	if grantsRole == "" {
+		grantsRole = RoleMember
+	}
+	if grantsRole != RoleAdmin && grantsRole != RoleMember {
+		return "", nil, fmt.Errorf("role: want %q or %q, got %q", RoleAdmin, RoleMember, grantsRole)
+	}
+	// In a flat account every device registers as an admin, so a token that said
+	// "member" would misdescribe what it does. Normalise at mint rather than
+	// leaving a row whose grants_role contradicts the role its bearer will get —
+	// the threat model leans on this column meaning something.
+	var mode string
+	if err := s.db.QueryRowContext(ctx, `SELECT admin_mode FROM accounts WHERE id=?`, accountID).Scan(&mode); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil, ErrDeviceNotFound
+		}
+		return "", nil, err
+	}
+	if mode != AdminModeManaged {
+		grantsRole = RoleAdmin
+	}
 	now := time.Now().UTC()
 	expires := now.Add(ttl)
 	if _, err := s.db.ExecContext(ctx,
-		`INSERT INTO invitations (token_hash, id, account_id, created, expires, consumed, revoked)
-		 VALUES (?, ?, ?, ?, ?, 0, 0)`,
-		hashToken(token), id, accountID, now.Format(time.RFC3339), expires.Format(time.RFC3339),
+		`INSERT INTO invitations (token_hash, id, account_id, created, expires, consumed, revoked, grants_role)
+		 VALUES (?, ?, ?, ?, ?, 0, 0, ?)`,
+		hashToken(token), id, accountID, now.Format(time.RFC3339), expires.Format(time.RFC3339), grantsRole,
 	); err != nil {
 		return "", nil, err
 	}
 	return token, &Invitation{
-		ID: id, AccountID: accountID,
+		ID: id, AccountID: accountID, GrantsRole: grantsRole,
 		Created: now.Truncate(time.Second), Expires: expires.Truncate(time.Second),
 	}, nil
 }
@@ -426,11 +500,40 @@ func (s *Store) RegisterDevice(ctx context.Context, token string, pub ed25519.Pu
 		return nil, ErrInvalidInvitation
 	}
 
-	var accountID string
+	var accountID, grantsRole, adminMode string
 	if err := tx.QueryRowContext(ctx,
-		`SELECT account_id FROM invitations WHERE token_hash=?`, hash,
-	).Scan(&accountID); err != nil {
+		`SELECT i.account_id, i.grants_role, a.admin_mode
+		   FROM invitations i JOIN accounts a ON i.account_id = a.id
+		  WHERE i.token_hash=?`, hash,
+	).Scan(&accountID, &grantsRole, &adminMode); err != nil {
 		return nil, err
+	}
+
+	// The account's mode decides which role a newly registered device gets. In a
+	// flat account every device is an admin, which is PRD 0.3 behaviour; in a
+	// managed one the invitation's grant applies. Either way the first device of
+	// an account is an admin, because the last-admin invariant would otherwise be
+	// unsatisfiable (PRD, decision 12).
+	role := RoleAdmin
+	if adminMode == AdminModeManaged {
+		role = grantsRole
+		// "The first device of an account is always an admin" means the first
+		// device ever, not the first live one. Counting only non-revoked devices
+		// would let a member-granting token enrol an ADMIN into a managed account
+		// whose devices had all been revoked — a privilege escalation through a
+		// token that says member, and a second recovery path from the stranded
+		// state with weaker authorization than the operator's promote. Bootstrap
+		// is for an account that has never had a device; recovery is
+		// `sund admin device promote`.
+		var everRegistered int
+		if err := tx.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM devices WHERE account_id=?`, accountID,
+		).Scan(&everRegistered); err != nil {
+			return nil, err
+		}
+		if everRegistered == 0 {
+			role = RoleAdmin
+		}
 	}
 
 	id, err := newID("dev_")
@@ -438,9 +541,9 @@ func (s *Store) RegisterDevice(ctx context.Context, token string, pub ed25519.Pu
 		return nil, err
 	}
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO devices (id, account_id, public_key, push_endpoint, capabilities, created, last_seen, revoked)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, 0)`,
-		id, accountID, []byte(pub), pushEndpoint, capabilities, now, now,
+		`INSERT INTO devices (id, account_id, public_key, push_endpoint, capabilities, created, last_seen, revoked, role)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+		id, accountID, []byte(pub), pushEndpoint, capabilities, now, now, role,
 	); err != nil {
 		return nil, err
 	}
@@ -452,7 +555,7 @@ func (s *Store) RegisterDevice(ctx context.Context, token string, pub ed25519.Pu
 	return &Device{
 		ID: id, AccountID: accountID, PublicKey: pub,
 		PushEndpoint: pushEndpoint, Capabilities: capabilities,
-		Created: t, LastSeen: t,
+		Created: t, LastSeen: t, Role: role,
 	}, nil
 }
 
@@ -497,12 +600,44 @@ func (s *Store) UpdatePushEndpoint(ctx context.Context, id, endpoint string) err
 // with its undelivered messages deleted. Afterward the device's signed requests
 // fail and its owned queues are unreachable. Idempotent — revoking an
 // already-revoked device is a no-op that still succeeds.
-func (s *Store) RevokeDevice(ctx context.Context, id string) error {
+//
+// callerID is the device that asked; pass the target's own id for a
+// self-revocation, which is always permitted — withholding it protects nothing,
+// since a device can discard its own key regardless, and it is the only remedy a
+// member has against an admin (PRD, decision 12).
+//
+// The last-admin invariant is enforced here, inside the same transaction as the
+// write: an account never loses its last admin to an act performed on ANOTHER
+// device. Two admins revoking each other concurrently therefore cannot both
+// pass — one becomes the last admin and its revocation is refused.
+func (s *Store) RevokeDevice(ctx context.Context, callerID, id string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+
+	if callerID != id {
+		var accountID, role string
+		var revoked int
+		if err := tx.QueryRowContext(ctx,
+			`SELECT account_id, role, revoked FROM devices WHERE id=?`, id,
+		).Scan(&accountID, &role, &revoked); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrDeviceNotFound
+			}
+			return err
+		}
+		// Revoking an already-revoked device stays a successful no-op. Several
+		// peers converging on the same removal is the normal case for a consumer
+		// whose roster merges tombstones (family-beacon's Reconciliation does
+		// exactly that), so all but the first must not get an error.
+		if revoked == 0 && role == RoleAdmin {
+			if err := assertNotLastAdmin(ctx, tx, accountID, id, true); err != nil {
+				return err
+			}
+		}
+	}
 
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM messages WHERE queue_id IN (SELECT recipient_id FROM queues WHERE owner_device=?)`,
@@ -522,7 +657,7 @@ func (s *Store) RevokeDevice(ctx context.Context, id string) error {
 	return tx.Commit()
 }
 
-const deviceColumns = `SELECT id, account_id, public_key, push_endpoint, capabilities, created, last_seen, revoked, quota_bytes FROM devices`
+const deviceColumns = `SELECT id, account_id, public_key, push_endpoint, capabilities, created, last_seen, revoked, quota_bytes, role FROM devices`
 
 type rowScanner interface {
 	Scan(dest ...any) error
@@ -535,7 +670,7 @@ func scanDevice(sc rowScanner) (*Device, error) {
 		created, lastSeen string
 		revoked           int
 	)
-	if err := sc.Scan(&d.ID, &d.AccountID, &pub, &d.PushEndpoint, &d.Capabilities, &created, &lastSeen, &revoked, &d.QuotaBytes); err != nil {
+	if err := sc.Scan(&d.ID, &d.AccountID, &pub, &d.PushEndpoint, &d.Capabilities, &created, &lastSeen, &revoked, &d.QuotaBytes, &d.Role); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrDeviceNotFound
 		}
@@ -609,4 +744,129 @@ func (s *Store) AccountQuotaBytes(ctx context.Context, accountID string) (int64,
 		return 0, ErrDeviceNotFound
 	}
 	return q, err
+}
+
+// ErrNotAdmin is returned when an act reserved to admins is attempted by a
+// member in a managed account.
+var ErrNotAdmin = errors.New("admin role required")
+
+// ErrLastAdmin is returned when an act would leave an account with no
+// non-revoked admin while other devices remain.
+var ErrLastAdmin = errors.New("account would lose its last admin")
+
+// ErrRoleChangeNotApplicable is returned by SetDeviceRole in a flat account,
+// where every device is an admin by definition of the mode: there is nothing to
+// promote, nothing to demote, and no walking a flat account into a managed one
+// one demotion at a time (PRD, decision 12).
+var ErrRoleChangeNotApplicable = errors.New("roles are not changeable in a flat account")
+
+// RequireAdmin reports whether dev may perform an admin-only act. The rule is
+// mode-independent — flat is simply the case where every device is an admin,
+// not a second code path.
+func RequireAdmin(dev *Device) error {
+	if dev.Role != RoleAdmin {
+		return ErrNotAdmin
+	}
+	return nil
+}
+
+// SetDeviceRole promotes or demotes a device within its account. Admin-only, and
+// refused outright in a flat account. The last-admin invariant is enforced in
+// the same transaction as the write: evaluated outside one it would be merely
+// usually true, which is the same as false.
+func (s *Store) SetDeviceRole(ctx context.Context, accountID, deviceID, role string) error {
+	if role != RoleAdmin && role != RoleMember {
+		return fmt.Errorf("role: want %q or %q, got %q", RoleAdmin, RoleMember, role)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var mode string
+	if err := tx.QueryRowContext(ctx, `SELECT admin_mode FROM accounts WHERE id=?`, accountID).Scan(&mode); err != nil {
+		return err
+	}
+	if mode != AdminModeManaged {
+		return ErrRoleChangeNotApplicable
+	}
+
+	var current string
+	if err := tx.QueryRowContext(ctx,
+		`SELECT role FROM devices WHERE id=? AND account_id=? AND revoked=0`, deviceID, accountID,
+	).Scan(&current); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrDeviceNotFound
+		}
+		return err
+	}
+	if current == RoleAdmin && role == RoleMember {
+		// Demotion has no escape hatch. The empty-account exception that
+		// revocation gets does not transfer: a device that demotes itself is
+		// still there, and can then neither invite nor promote, so the account
+		// needs operator recovery to be usable at all. "The last non-revoked
+		// admin cannot be demoted" is written without a self-exception, unlike
+		// self-revocation, and this is why.
+		if err := assertNotLastAdmin(ctx, tx, accountID, deviceID, false); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE devices SET role=? WHERE id=?`, role, deviceID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// assertNotLastAdmin fails if deviceID is the account's only non-revoked admin.
+//
+// allowIfAccountEmpties relaxes that for revocation: an account whose last
+// device is also its last admin strands nobody, so revoking it is permitted.
+// Demotion passes false, because a demoted device remains in the account and
+// would leave it with members and no way to administer them.
+func assertNotLastAdmin(ctx context.Context, tx *sql.Tx, accountID, deviceID string, allowIfAccountEmpties bool) error {
+	var otherAdmins, otherDevices int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM devices WHERE account_id=? AND revoked=0 AND role=? AND id<>?`,
+		accountID, RoleAdmin, deviceID,
+	).Scan(&otherAdmins); err != nil {
+		return err
+	}
+	if otherAdmins > 0 {
+		return nil
+	}
+	if !allowIfAccountEmpties {
+		return ErrLastAdmin
+	}
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM devices WHERE account_id=? AND revoked=0 AND id<>?`,
+		accountID, deviceID,
+	).Scan(&otherDevices); err != nil {
+		return err
+	}
+	if otherDevices > 0 {
+		return ErrLastAdmin
+	}
+	return nil
+}
+
+// PromoteDevice is the operator's recovery path for a managed account that lost
+// its only admin (PRD, decision 12). Refused against a revoked device and in a
+// flat account, where every non-revoked device is already an admin.
+func (s *Store) PromoteDevice(ctx context.Context, deviceID string) error {
+	var mode string
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT a.admin_mode FROM devices d JOIN accounts a ON d.account_id=a.id WHERE d.id=? AND d.revoked=0`,
+		deviceID,
+	).Scan(&mode); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrDeviceNotFound
+		}
+		return err
+	}
+	if mode != AdminModeManaged {
+		return ErrRoleChangeNotApplicable
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE devices SET role=? WHERE id=?`, RoleAdmin, deviceID)
+	return err
 }

@@ -58,12 +58,12 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, registerResponse{DeviceID: dev.ID, AccountID: dev.AccountID})
 }
 
-// handleRevoke revokes a device in the caller's account. Any device in the
-// account may revoke any other (or itself) — equivalent to PRD 0.4's `flat`
-// administration mode, which is the default. PRD 0.4 also specifies an opt-in
-// `managed` mode gating this behind an admin role (it is a server-side rule
-// because only the server can refuse a server operation); none of that is
-// implemented yet. Cross-account targets 404 without confirming they exist.
+// handleRevoke revokes a device in the caller's account. Revoking ANOTHER device
+// is admin-only, which in a flat account is every device (PRD 0.3 behaviour) and
+// in a managed one is the admins. Revoking yourself is always allowed, whatever
+// your role: it is the only remedy a member has against an admin, and
+// withholding it would protect nothing. Cross-account targets 404 without
+// confirming they exist.
 func (s *Server) handleRevoke(w http.ResponseWriter, r *http.Request) {
 	caller, ok := deviceFromContext(r.Context())
 	if !ok {
@@ -83,20 +83,37 @@ func (s *Server) handleRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Revoking another device is an administrative act; revoking yourself is not.
+	if targetID != caller.ID {
+		if err := store.RequireAdmin(caller); err != nil {
+			writeError(w, http.StatusForbidden, "admin role required")
+			return
+		}
+	}
+
 	// Capture the target's wake-up endpoint before revoking: RevokeDevice clears
 	// it inside its transaction, and wakeAccountDevices skips revoked devices and
 	// empty endpoints, so after this point there is nothing left to ping with.
 	targetEndpoint := target.PushEndpoint
 
-	if err := s.store.RevokeDevice(r.Context(), targetID); err != nil {
+	switch err := s.store.RevokeDevice(r.Context(), caller.ID, targetID); {
+	case errors.Is(err, store.ErrLastAdmin):
+		writeError(w, http.StatusConflict, "account would lose its last admin")
+		return
+	case errors.Is(err, store.ErrDeviceNotFound):
+		writeError(w, http.StatusNotFound, "no such device")
+		return
+	case err != nil:
 		log.Printf("revoke: %v", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 
 	// Device-list change: wake the account's other devices so they refetch,
-	// drop the revoked device's queues, and rotate/re-key their own.
-	s.wakeAccountDevices(caller.AccountID, targetID)
+	// drop the revoked device's queues, and rotate/re-key their own. Exclude the
+	// caller, which is the device that performed the act — the target is skipped
+	// anyway, being revoked with a cleared endpoint by now.
+	s.wakeAccountDevices(caller.AccountID, caller.ID)
 
 	// And wake the target itself. It is the device the act was performed on and
 	// the one with most reason to be told, and family-beacon's roster spec
@@ -105,7 +122,7 @@ func (s *Server) handleRevoke(w http.ResponseWriter, r *http.Request) {
 	// fails closed. Normal priority deliberately — the urgency hint is a
 	// disclosure (PRD, decision 18) and being revoked does not warrant spending
 	// it.
-	if targetEndpoint != "" {
+	if targetEndpoint != "" && targetID != caller.ID {
 		s.dispatchPing(targetEndpoint, push.Normal)
 	}
 
@@ -113,7 +130,11 @@ func (s *Server) handleRevoke(w http.ResponseWriter, r *http.Request) {
 }
 
 type deviceView struct {
-	ID           string `json:"id"`
+	ID string `json:"id"`
+	// Role is peer-readable on purpose: authority over other devices must be
+	// visible to the devices it is held over. Contrast quota_bytes, which is
+	// deliberately absent (PRD, decision 16).
+	Role         string `json:"role"`
 	PublicKey    string `json:"public_key"` // base64 (standard)
 	PushEndpoint string `json:"push_endpoint"`
 	Capabilities string `json:"capabilities"`
@@ -125,6 +146,7 @@ type deviceView struct {
 func toDeviceView(d store.Device) deviceView {
 	return deviceView{
 		ID:           d.ID,
+		Role:         d.Role,
 		PublicKey:    base64.StdEncoding.EncodeToString(d.PublicKey),
 		PushEndpoint: d.PushEndpoint,
 		Capabilities: d.Capabilities,
@@ -151,12 +173,32 @@ func (s *Server) handleCreateInvitation(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	token, inv, err := s.store.CreateInvitation(r.Context(), dev.AccountID, defaultInvitationTTL)
+	if err := store.RequireAdmin(dev); err != nil {
+		writeError(w, http.StatusForbidden, "admin role required")
+		return
+	}
+	// An empty body is fine — grants_role then defaults to member in a managed
+	// account, and is normalised to admin in a flat one — but a malformed body is
+	// not, or a typo'd field would silently yield the default role.
+	var req createInvitationRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxBodyBytes)).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	if req.GrantsRole != "" && req.GrantsRole != store.RoleAdmin && req.GrantsRole != store.RoleMember {
+		writeError(w, http.StatusBadRequest, "grants_role must be admin or member")
+		return
+	}
+	token, inv, err := s.store.CreateInvitation(r.Context(), dev.AccountID, defaultInvitationTTL, req.GrantsRole)
 	if err != nil {
 		log.Printf("create invitation: %v", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
+
+	// Minting is an administrative act: it wakes the account so an invitation
+	// cannot be minted unobserved (PRD, propagation).
+	s.wakeAccountDevices(dev.AccountID, dev.ID)
 	writeJSON(w, http.StatusCreated, invitationResponse{
 		InvitationToken: token,
 		InvitationID:    inv.ID,
@@ -278,4 +320,57 @@ func (s *Server) handleGetQuota(w http.ResponseWriter, r *http.Request) {
 		StoredBytes:       used,
 		AccountQuotaBytes: accountQuota,
 	})
+}
+
+type createInvitationRequest struct {
+	GrantsRole string `json:"grants_role"`
+}
+
+type setRoleRequest struct {
+	Role string `json:"role"`
+}
+
+// handleSetRole promotes or demotes a device in the caller's account. Admin
+// only, and refused outright in a flat account: flat means every device is an
+// admin as a property of the account, not a coincidence of the current rows, so
+// there is nothing to promote, nothing to demote, and no walking a flat account
+// into a managed one one demotion at a time (PRD, decision 12).
+func (s *Server) handleSetRole(w http.ResponseWriter, r *http.Request) {
+	caller, ok := deviceFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	if err := store.RequireAdmin(caller); err != nil {
+		writeError(w, http.StatusForbidden, "admin role required")
+		return
+	}
+	targetID := r.PathValue("id")
+
+	var req setRoleRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxBodyBytes)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+
+	switch err := s.store.SetDeviceRole(r.Context(), caller.AccountID, targetID, req.Role); {
+	case errors.Is(err, store.ErrRoleChangeNotApplicable):
+		writeError(w, http.StatusConflict, "roles are not changeable in a flat account")
+		return
+	case errors.Is(err, store.ErrLastAdmin):
+		writeError(w, http.StatusConflict, "account would lose its last admin")
+		return
+	case errors.Is(err, store.ErrDeviceNotFound):
+		writeError(w, http.StatusNotFound, "no such device")
+		return
+	case err != nil:
+		writeError(w, http.StatusBadRequest, "invalid role")
+		return
+	}
+
+	// A role change is an administrative act: it pings every device in the
+	// account except the one that performed it.
+	s.wakeAccountDevices(caller.AccountID, caller.ID)
+
+	writeJSON(w, http.StatusOK, map[string]string{"role": req.Role})
 }

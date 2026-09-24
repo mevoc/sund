@@ -9,11 +9,11 @@ import (
 func seedQueue(t *testing.T, st *Store) *Queue {
 	t.Helper()
 	ctx := context.Background()
-	acc, err := st.CreateAccount(ctx, "standard", 0)
+	acc, err := st.CreateAccount(ctx, "standard", 0, AdminModeFlat)
 	if err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
-	token, _, err := st.CreateInvitation(ctx, acc.ID, 15*time.Minute)
+	token, _, err := st.CreateInvitation(ctx, acc.ID, 15*time.Minute, RoleAdmin)
 	if err != nil {
 		t.Fatalf("CreateInvitation: %v", err)
 	}

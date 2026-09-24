@@ -168,3 +168,15 @@ func TestRegistrationPingsExistingDevices(t *testing.T) {
 		t.Errorf("pinged %q, want %q", got.endpoint, endpointA)
 	}
 }
+
+// drain discards any pings already queued, so a test can assert only on what
+// happens next.
+func (f *fakePinger) drain() {
+	for {
+		select {
+		case <-f.ch:
+		default:
+			return
+		}
+	}
+}

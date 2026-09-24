@@ -117,21 +117,52 @@ func TestCrossAccountRevokeRejected(t *testing.T) {
 	}
 }
 
-func TestRevokePingsPeers(t *testing.T) {
+// A revocation wakes the account's other devices and the target, and NOT the
+// device that performed it — "every device in the account other than the one
+// that performed it", plus the target (PRD, Devices → propagation). Three
+// devices are needed to tell those apart: with two, the only peer is the actor.
+func TestRevokePingsPeersAndTargetButNotTheActor(t *testing.T) {
 	srv, st, fp := newServerWithPinger(t)
+	ctx := context.Background()
+
 	aID, aPriv := registerDevice(t, srv, st)
-	if err := st.UpdatePushEndpoint(context.Background(), aID, "https://push.example/a"); err != nil {
+	if err := st.UpdatePushEndpoint(ctx, aID, "https://push.example/a"); err != nil {
 		t.Fatalf("UpdatePushEndpoint: %v", err)
 	}
 	bID, _ := registerSecondDevice(t, srv, aID, aPriv)
-	// Drain the ping caused by B's registration.
+	if err := st.UpdatePushEndpoint(ctx, bID, "https://push.example/b"); err != nil {
+		t.Fatalf("UpdatePushEndpoint: %v", err)
+	}
+	// B's registration pings A. (B's own invitation was minted when A was the
+	// only device, so that mint pinged nobody.)
 	fp.await(t)
+
+	cID, _ := registerSecondDevice(t, srv, aID, aPriv)
+	if err := st.UpdatePushEndpoint(ctx, cID, "https://push.example/c"); err != nil {
+		t.Fatalf("UpdatePushEndpoint: %v", err)
+	}
+	// C's invitation mint pings B, then C's registration pings A and B. Counted
+	// rather than drained: draining races the ping goroutine.
+	for range 3 {
+		fp.await(t)
+	}
 
 	rec := serve(srv, signWith(t, aPriv, aID, http.MethodPost, "/v1/devices/"+bID+"/revoke", nil, nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("revoke status = %d, want 200", rec.Code)
 	}
-	if got := fp.await(t); got.endpoint != "https://push.example/a" {
-		t.Errorf("revoke pinged %q, want A's endpoint", got.endpoint)
+
+	got := map[string]bool{}
+	for range 2 {
+		got[fp.await(t).endpoint] = true
+	}
+	if !got["https://push.example/c"] {
+		t.Errorf("the peer C was not pinged; got %v", got)
+	}
+	if !got["https://push.example/b"] {
+		t.Errorf("the revoked target B was not pinged; got %v", got)
+	}
+	if got["https://push.example/a"] {
+		t.Errorf("the acting device A must not be pinged by its own act; got %v", got)
 	}
 }

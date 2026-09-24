@@ -97,9 +97,15 @@ class Client:
         r.raise_for_status()
         return r.json()["devices"]
 
-    def create_invitation(self) -> Invitation:
-        """Mint a single-use token to pair another device into this account."""
-        r = self._request("POST", "/v1/invitations")
+    def create_invitation(self, grants_role: str = "") -> Invitation:
+        """Mint a single-use token to pair another device into this account.
+
+        In a managed account this is admin-only and grants_role decides the new
+        device's role (default member). In a flat account it is ignored, since
+        every device registers as an admin.
+        """
+        body = json.dumps({"grants_role": grants_role}).encode() if grants_role else b""
+        r = self._request("POST", "/v1/invitations", body)
         r.raise_for_status()
         data = r.json()
         return Invitation(
@@ -129,6 +135,20 @@ class Client:
         """Revoke a device in this account (e.g. a lost or stolen phone)."""
         r = self._request("POST", f"/v1/devices/{device_id}/revoke")
         r.raise_for_status()
+
+    def set_role(self, device_id: str, role: str) -> httpx.Response:
+        """Promote or demote a device. Admin-only; refused in a flat account."""
+        body = json.dumps({"role": role}).encode()
+        return self._request("POST", f"/v1/devices/{device_id}/role", body)
+
+    def revoke_device_raw(self, device_id: str) -> httpx.Response:
+        """Revoke without raising, so a test can assert on the status."""
+        return self._request("POST", f"/v1/devices/{device_id}/revoke")
+
+    def create_invitation_raw(self, grants_role: str = "") -> httpx.Response:
+        """Mint without raising, so a test can assert on the status."""
+        body = json.dumps({"grants_role": grants_role}).encode() if grants_role else b""
+        return self._request("POST", "/v1/invitations", body)
 
     def get_quota(self) -> dict:
         """This device's own ceiling and usage. Self-scoped: no peer can be named."""

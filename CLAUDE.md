@@ -62,7 +62,11 @@ intent.
   SEND*, not supplied at queue creation, and expired messages are now swept from
   abandoned queues hourly rather than only on drain, so "it stores briefly" holds
   for queues nobody visits. From 0.10:
-  the wake-up **priority hint** is stated rather than denied (decision 18) — a
+  the account administration model of decision 12 is **built** — flat/managed
+  accounts, `admin`/`member` roles, admin-gated revoke and invite, unconditional
+  self-revocation, and the last-admin invariant enforced transactionally. Also
+  in 0.11: the wake-up **priority hint** is stated rather than denied
+  (decision 18) — a
   ping has always carried one bit beyond "check in", and in family-beacon's shape
   timing plus that bit distinguishes an SOS from a location update. Kept, because
   an Android device in Doze will not wake without it; disclosed, because "a ping

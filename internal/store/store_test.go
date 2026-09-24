@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 )
@@ -22,11 +23,11 @@ func newStore(t *testing.T) *Store {
 func seedAccountAndToken(t *testing.T, st *Store, ttl time.Duration) (accountID, token string) {
 	t.Helper()
 	ctx := context.Background()
-	acc, err := st.CreateAccount(ctx, "standard", 0)
+	acc, err := st.CreateAccount(ctx, "standard", 0, AdminModeFlat)
 	if err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
-	token, _, err = st.CreateInvitation(ctx, acc.ID, ttl)
+	token, _, err = st.CreateInvitation(ctx, acc.ID, ttl, RoleAdmin)
 	if err != nil {
 		t.Fatalf("CreateInvitation: %v", err)
 	}
@@ -105,12 +106,12 @@ func TestRegisterDeviceUnknownToken(t *testing.T) {
 func TestListDevices(t *testing.T) {
 	st := newStore(t)
 	ctx := context.Background()
-	acc, err := st.CreateAccount(ctx, "standard", 0)
+	acc, err := st.CreateAccount(ctx, "standard", 0, AdminModeFlat)
 	if err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
 	for i := 0; i < 3; i++ {
-		token, _, err := st.CreateInvitation(ctx, acc.ID, 15*time.Minute)
+		token, _, err := st.CreateInvitation(ctx, acc.ID, 15*time.Minute, RoleAdmin)
 		if err != nil {
 			t.Fatalf("CreateInvitation: %v", err)
 		}
@@ -131,20 +132,20 @@ func TestListDevices(t *testing.T) {
 func TestListInvitationsOutstandingOnly(t *testing.T) {
 	st := newStore(t)
 	ctx := context.Background()
-	acc, err := st.CreateAccount(ctx, "standard", 0)
+	acc, err := st.CreateAccount(ctx, "standard", 0, AdminModeFlat)
 	if err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
 
 	// One live, one expired, one that gets consumed.
-	_, live, err := st.CreateInvitation(ctx, acc.ID, 15*time.Minute)
+	_, live, err := st.CreateInvitation(ctx, acc.ID, 15*time.Minute, RoleAdmin)
 	if err != nil {
 		t.Fatalf("CreateInvitation live: %v", err)
 	}
-	if _, _, err := st.CreateInvitation(ctx, acc.ID, -1*time.Minute); err != nil {
+	if _, _, err := st.CreateInvitation(ctx, acc.ID, -1*time.Minute, RoleAdmin); err != nil {
 		t.Fatalf("CreateInvitation expired: %v", err)
 	}
-	consumedToken, _, err := st.CreateInvitation(ctx, acc.ID, 15*time.Minute)
+	consumedToken, _, err := st.CreateInvitation(ctx, acc.ID, 15*time.Minute, RoleAdmin)
 	if err != nil {
 		t.Fatalf("CreateInvitation consumed: %v", err)
 	}
@@ -164,11 +165,11 @@ func TestListInvitationsOutstandingOnly(t *testing.T) {
 func TestRevokeInvitationBlocksRegistration(t *testing.T) {
 	st := newStore(t)
 	ctx := context.Background()
-	acc, err := st.CreateAccount(ctx, "standard", 0)
+	acc, err := st.CreateAccount(ctx, "standard", 0, AdminModeFlat)
 	if err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
-	token, inv, err := st.CreateInvitation(ctx, acc.ID, 15*time.Minute)
+	token, inv, err := st.CreateInvitation(ctx, acc.ID, 15*time.Minute, RoleAdmin)
 	if err != nil {
 		t.Fatalf("CreateInvitation: %v", err)
 	}
@@ -194,15 +195,15 @@ func TestRevokeInvitationBlocksRegistration(t *testing.T) {
 func TestRevokeInvitationIsAccountScoped(t *testing.T) {
 	st := newStore(t)
 	ctx := context.Background()
-	accA, err := st.CreateAccount(ctx, "standard", 0)
+	accA, err := st.CreateAccount(ctx, "standard", 0, AdminModeFlat)
 	if err != nil {
 		t.Fatalf("CreateAccount A: %v", err)
 	}
-	accB, err := st.CreateAccount(ctx, "standard", 0)
+	accB, err := st.CreateAccount(ctx, "standard", 0, AdminModeFlat)
 	if err != nil {
 		t.Fatalf("CreateAccount B: %v", err)
 	}
-	_, inv, err := st.CreateInvitation(ctx, accA.ID, 15*time.Minute)
+	_, inv, err := st.CreateInvitation(ctx, accA.ID, 15*time.Minute, RoleAdmin)
 	if err != nil {
 		t.Fatalf("CreateInvitation: %v", err)
 	}
@@ -223,11 +224,11 @@ func TestRevokeInvitationIsAccountScoped(t *testing.T) {
 func TestRevokeInvitationTwiceIsNoop(t *testing.T) {
 	st := newStore(t)
 	ctx := context.Background()
-	acc, err := st.CreateAccount(ctx, "standard", 0)
+	acc, err := st.CreateAccount(ctx, "standard", 0, AdminModeFlat)
 	if err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
-	_, inv, err := st.CreateInvitation(ctx, acc.ID, 15*time.Minute)
+	_, inv, err := st.CreateInvitation(ctx, acc.ID, 15*time.Minute, RoleAdmin)
 	if err != nil {
 		t.Fatalf("CreateInvitation: %v", err)
 	}
@@ -251,11 +252,11 @@ func TestRevokeDevice(t *testing.T) {
 	st := newStore(t)
 	ctx := context.Background()
 
-	acc, err := st.CreateAccount(ctx, "standard", 0)
+	acc, err := st.CreateAccount(ctx, "standard", 0, AdminModeFlat)
 	if err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
-	token, _, err := st.CreateInvitation(ctx, acc.ID, 15*time.Minute)
+	token, _, err := st.CreateInvitation(ctx, acc.ID, 15*time.Minute, RoleAdmin)
 	if err != nil {
 		t.Fatalf("CreateInvitation: %v", err)
 	}
@@ -271,7 +272,7 @@ func TestRevokeDevice(t *testing.T) {
 		t.Fatalf("AppendMessage: %v", err)
 	}
 
-	if err := st.RevokeDevice(ctx, dev.ID); err != nil {
+	if err := st.RevokeDevice(ctx, dev.ID, dev.ID); err != nil {
 		t.Fatalf("RevokeDevice: %v", err)
 	}
 
@@ -307,10 +308,10 @@ func TestRevokeDeviceIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RegisterDevice: %v", err)
 	}
-	if err := st.RevokeDevice(ctx, dev.ID); err != nil {
+	if err := st.RevokeDevice(ctx, dev.ID, dev.ID); err != nil {
 		t.Fatalf("first revoke: %v", err)
 	}
-	if err := st.RevokeDevice(ctx, dev.ID); err != nil {
+	if err := st.RevokeDevice(ctx, dev.ID, dev.ID); err != nil {
 		t.Fatalf("second revoke should be a no-op, got: %v", err)
 	}
 }
@@ -424,5 +425,67 @@ func TestAppendDrainAfterStatusDrop(t *testing.T) {
 	}
 	if len(msgs) != 1 || string(msgs[0].Payload) != "ciphertext" {
 		t.Fatalf("got %d messages, want 1 with the stored payload", len(msgs))
+	}
+}
+
+// Two admins revoking each other concurrently must not both succeed. The
+// invariant is enforced inside the revocation's transaction for exactly this:
+// evaluated outside one it would be merely usually true (PRD, decision 12).
+func TestConcurrentRevokeLeavesOneAdmin(t *testing.T) {
+	ctx := context.Background()
+	path := t.TempDir() + "/race.db"
+	st, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer st.Close()
+
+	acc, err := st.CreateAccount(ctx, "standard", 0, AdminModeManaged)
+	if err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	mk := func(role string) *Device {
+		t.Helper()
+		token, _, err := st.CreateInvitation(ctx, acc.ID, time.Minute, role)
+		if err != nil {
+			t.Fatalf("CreateInvitation: %v", err)
+		}
+		d, err := st.RegisterDevice(ctx, token, randKey(t), "", "")
+		if err != nil {
+			t.Fatalf("RegisterDevice: %v", err)
+		}
+		return d
+	}
+	a, b := mk(RoleAdmin), mk(RoleAdmin)
+	if a.Role != RoleAdmin || b.Role != RoleAdmin {
+		t.Fatalf("both devices should be admins, got %q and %q", a.Role, b.Role)
+	}
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	wg.Add(2)
+	go func() { defer wg.Done(); errs[0] = st.RevokeDevice(ctx, a.ID, b.ID) }()
+	go func() { defer wg.Done(); errs[1] = st.RevokeDevice(ctx, b.ID, a.ID) }()
+	wg.Wait()
+
+	var admins int
+	if err := st.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM devices WHERE account_id=? AND revoked=0 AND role=?`,
+		acc.ID, RoleAdmin,
+	).Scan(&admins); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if admins == 0 {
+		t.Fatalf("both revocations landed; the account has no admin left (errs: %v)", errs)
+	}
+}
+
+// The operator's recovery path exists only where roles do.
+func TestPromoteIsRefusedInAFlatAccount(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	dev := seedDevice(t, st)
+	if err := st.PromoteDevice(ctx, dev.ID); !errors.Is(err, ErrRoleChangeNotApplicable) {
+		t.Fatalf("promote in a flat account: got %v, want ErrRoleChangeNotApplicable", err)
 	}
 }

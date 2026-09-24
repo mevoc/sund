@@ -158,11 +158,17 @@ def provision_account():
     server's database file, and returns (account_id, invitation_token).
     """
 
-    def _provision(server: SundServer, quota: str = "standard", quota_bytes: int = 0) -> tuple[str, str]:
+    def _provision(
+        server: SundServer,
+        quota: str = "standard",
+        quota_bytes: int = 0,
+        admin_mode: str = "flat",
+    ) -> tuple[str, str]:
         args = [
             str(server.binary), "admin", "account", "create",
             "--db", str(server.db_path),
             "--quota", quota,
+            "--admin-mode", admin_mode,
         ]
         if quota_bytes:
             args += ["--quota-bytes", str(quota_bytes)]
@@ -178,8 +184,10 @@ def provision_account():
 def new_account(sund_server, provision_account):
     """Factory bound to the default sund_server fixture."""
 
-    def _make(quota: str = "standard", quota_bytes: int = 0) -> tuple[str, str]:
-        return provision_account(sund_server, quota, quota_bytes)
+    def _make(
+        quota: str = "standard", quota_bytes: int = 0, admin_mode: str = "flat"
+    ) -> tuple[str, str]:
+        return provision_account(sund_server, quota, quota_bytes, admin_mode)
 
     return _make
 

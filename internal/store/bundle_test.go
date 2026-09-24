@@ -77,7 +77,7 @@ func TestRevokeClearsBundle(t *testing.T) {
 	if err := st.SetBundle(ctx, dev.ID, []byte("bundle")); err != nil {
 		t.Fatalf("SetBundle: %v", err)
 	}
-	if err := st.RevokeDevice(ctx, dev.ID); err != nil {
+	if err := st.RevokeDevice(ctx, dev.ID, dev.ID); err != nil {
 		t.Fatalf("RevokeDevice: %v", err)
 	}
 	if _, _, err := st.GetBundle(ctx, dev.ID); !errors.Is(err, ErrBundleNotFound) {

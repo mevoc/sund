@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
+	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/mevoc/sund/internal/sigauth"
@@ -127,15 +129,70 @@ func (d *Device) RevokeDevice(ctx context.Context, deviceID string) error {
 
 // CreateInvitation mints a single-use token to enroll another device.
 func (d *Device) CreateInvitation(ctx context.Context) (Invitation, error) {
+	return d.CreateInvitationAs(ctx, "")
+}
+
+// CreateInvitationAs mints an invitation granting a specific role. In a managed
+// account the role decides what the bearer enrols as, defaulting to RoleMember;
+// in a flat account every device enrols as an admin and the server normalises
+// the stored grant to match (PRD, decisions 12 and 19). Minting is admin-only.
+func (d *Device) CreateInvitationAs(ctx context.Context, role string) (Invitation, error) {
+	var in any
+	if role != "" {
+		in = map[string]string{"grants_role": role}
+	}
 	var out struct {
 		Token   string `json:"invitation_token"`
 		ID      string `json:"invitation_id"`
 		Expires string `json:"expires"`
 	}
-	if err := d.do(ctx, http.MethodPost, "/v1/invitations", nil, &out); err != nil {
+	if err := d.do(ctx, http.MethodPost, "/v1/invitations", in, &out); err != nil {
 		return Invitation{}, err
 	}
 	return Invitation{ID: out.ID, Token: out.Token, Expires: parseTime(out.Expires)}, nil
+}
+
+// Device roles (PRD, decision 12). A flat account registers every device as
+// RoleAdmin; a managed account uses the role its invitation granted.
+const (
+	RoleAdmin  = "admin"
+	RoleMember = "member"
+)
+
+// SetRole promotes or demotes a device in the caller's account. Admin-only, and
+// refused in a flat account, where every device is an admin as a property of the
+// account rather than a coincidence of the current rows. The account's last
+// admin cannot be demoted.
+func (d *Device) SetRole(ctx context.Context, deviceID, role string) error {
+	return d.do(ctx, http.MethodPost, "/v1/devices/"+deviceID+"/role",
+		map[string]string{"role": role}, nil)
+}
+
+// Quota is a device's own storage accounting. StoredBytes counts the live
+// payloads in the queues it owns; QuotaBytes is its ceiling, 0 meaning none.
+// AccountQuotaBytes is the shared ceiling, a constant that binds every device
+// equally — account *usage* is deliberately not reported, since it would be an
+// activity signal about peers (PRD, decision 16).
+type Quota struct {
+	QuotaBytes        int64
+	StoredBytes       int64
+	AccountQuotaBytes int64
+}
+
+// Quota reads the calling device's own ceiling and usage. Self-scoped by
+// construction: it takes no target, so a device cannot ask about a peer. This is
+// what lets a capped device tell "I am full" from "someone capped me" — a
+// ceiling is set by the operator and is not in the device list.
+func (d *Device) Quota(ctx context.Context) (Quota, error) {
+	var out struct {
+		QuotaBytes        int64 `json:"quota_bytes"`
+		StoredBytes       int64 `json:"stored_bytes"`
+		AccountQuotaBytes int64 `json:"account_quota_bytes"`
+	}
+	if err := d.do(ctx, http.MethodGet, "/v1/me/quota", nil, &out); err != nil {
+		return Quota{}, err
+	}
+	return Quota(out), nil
 }
 
 // ListInvitations returns the account's outstanding invitations, without tokens.
@@ -196,4 +253,63 @@ func (d *Device) CreateQueue(ctx context.Context, recipientKey ed25519.PublicKey
 		return QueueIDs{}, err
 	}
 	return QueueIDs{RecipientID: out.RecipientID, SenderID: out.SenderID}, nil
+}
+
+// Statement is one entry in an account's administrative log. Blob is opaque to
+// Sund and to this package: a consumer signs and encrypts it, and only the
+// account's devices can verify or read it.
+type Statement struct {
+	Seq     int64
+	Blob    []byte
+	Created time.Time
+}
+
+// AppendStatement writes one administrative statement to the account log
+// (PRD, decision 21). Admin-only.
+//
+// The blob must be signed AND encrypted by the caller. Signing is what lets a
+// peer tell a real act from one a hostile host invented; encryption is what
+// stops the log from becoming the actor-to-target record Sund's data model
+// refuses. This package cannot check either — it carries bytes.
+func (d *Device) AppendStatement(ctx context.Context, blob []byte) (Statement, error) {
+	var out struct {
+		Seq       int64  `json:"seq"`
+		Statement string `json:"statement"`
+		Created   string `json:"created"`
+	}
+	in := map[string]string{"statement": base64.StdEncoding.EncodeToString(blob)}
+	if err := d.do(ctx, http.MethodPost, "/v1/statements", in, &out); err != nil {
+		return Statement{}, err
+	}
+	return Statement{Seq: out.Seq, Blob: blob, Created: parseTime(out.Created)}, nil
+}
+
+// Statements reads the account's log from since onward, exclusive. Readable by
+// every device in the account, not only admins: the point of the log is that a
+// peer can check an act for itself. Pass 0 for everything retained.
+//
+// A gap in the sequence means entries were trimmed (an account keeps a bounded
+// number) or withheld. Signing defeats forgery, not suppression: the host serves
+// this log and can truncate it, which no server-stored log can prevent.
+func (d *Device) Statements(ctx context.Context, since int64) ([]Statement, error) {
+	var out struct {
+		Statements []struct {
+			Seq       int64  `json:"seq"`
+			Statement string `json:"statement"`
+			Created   string `json:"created"`
+		} `json:"statements"`
+	}
+	path := "/v1/statements/" + strconv.FormatInt(since, 10)
+	if err := d.do(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return nil, err
+	}
+	res := make([]Statement, len(out.Statements))
+	for i, v := range out.Statements {
+		blob, err := base64.StdEncoding.DecodeString(v.Statement)
+		if err != nil {
+			return nil, fmt.Errorf("statement %d: %w", v.Seq, err)
+		}
+		res[i] = Statement{Seq: v.Seq, Blob: blob, Created: parseTime(v.Created)}
+	}
+	return res, nil
 }

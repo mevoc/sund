@@ -39,13 +39,42 @@ def test_revoke_disables_device_and_queues(sund_server, new_account, push_sink):
     assert excinfo.value.response.status_code == 404
 
 
-def test_revoke_pings_peers(sund_server, new_account, push_sink):
-    a, b = _account_with_two_devices(sund_server, new_account, push_sink)
+def test_revoke_pings_peers_and_target_but_not_the_actor(sund_server, new_account, push_sink):
+    """Three devices, because with two the only "peer" is the actor itself.
 
-    a.revoke_device(b.device_id)
+    The propagation rule is "every device in the account other than the one that
+    performed it", plus the target. An earlier version of this test asserted the
+    actor was pinged, which is what the code did and the PRD did not say.
+    """
+    _, token = new_account()
+    actor = beaconsim.register_device(
+        sund_server.base_url, token, push_endpoint=push_sink.url("/actor")
+    )
+    target = beaconsim.register_device(
+        sund_server.base_url,
+        actor.create_invitation().token,
+        push_endpoint=push_sink.url("/target"),
+    )
+    peer = beaconsim.register_device(
+        sund_server.base_url,
+        actor.create_invitation().token,
+        push_endpoint=push_sink.url("/peer"),
+    )
+    assert peer.device_id  # registered
 
-    assert push_sink.wait_for(1), "peers were not pinged on revocation"
-    assert push_sink.received[-1]["body"] == b""
+    # Setup emits four pings: target's registration wakes actor; peer's
+    # invitation mint wakes target; peer's registration wakes actor and target.
+    # Wait for all four before clearing, or a straggler lands after the clear and
+    # the assertions below read it as a revocation ping.
+    assert push_sink.wait_for(4), "setup pings did not all arrive"
+    push_sink.received.clear()
+
+    actor.revoke_device(target.device_id)
+    assert push_sink.wait_for(2), "the peer and the target should both be pinged"
+    paths = {p["path"] for p in push_sink.received}
+    assert "/peer" in paths, "the account's other devices must be woken"
+    assert "/target" in paths, "the revoked device must be told"
+    assert "/actor" not in paths, "a device must not be pinged by its own act"
 
 
 def test_revoked_device_shown_as_revoked_in_list(sund_server, new_account, push_sink):
@@ -88,31 +117,29 @@ def test_cross_account_revoke_forbidden(sund_server, new_account, push_sink):
     assert stranger.list_devices()  # does not raise
 
 
-def test_revoke_pings_the_target_too(sund_server, new_account, push_sink):
-    """The removed device is told, not only its peers.
+def test_revoke_target_ping_survives_endpoint_clearing(sund_server, new_account, push_sink):
+    """The removed device is told, which needs its endpoint captured pre-revoke.
 
-    It is the device the act was performed on, and family-beacon's roster spec
-    requires that a removed device is told when it is reachable. The ping has to
-    be dispatched with an endpoint captured before revocation, since revoking
-    clears it (docs/deviations.md, 2026-09-23).
+    Revocation clears push_endpoint inside its transaction and wakeAccountDevices
+    skips revoked devices, so without capturing it first there is nothing left to
+    ping with (docs/deviations.md, 2026-09-23). family-beacon's roster spec
+    requires that a removed device is told when it is reachable.
     """
     _, token = new_account()
-    a = beaconsim.register_device(
-        sund_server.base_url, token, push_endpoint=push_sink.url("/peer")
+    actor = beaconsim.register_device(
+        sund_server.base_url, token, push_endpoint=push_sink.url("/actor")
     )
-    token_b = a.create_invitation().token
-    b = beaconsim.register_device(
-        sund_server.base_url, token_b, push_endpoint=push_sink.url("/target")
+    target = beaconsim.register_device(
+        sund_server.base_url,
+        actor.create_invitation().token,
+        push_endpoint=push_sink.url("/target"),
     )
     push_sink.wait_for(1)
     push_sink.received.clear()
 
-    a.revoke_device(b.device_id)
-    assert push_sink.wait_for(2), "both the peer and the target should be pinged"
-
-    paths = {p["path"] for p in push_sink.received}
-    assert "/target" in paths, "the revoked device was never told it was revoked"
-    assert "/peer" in paths, "the account's other devices must still be woken"
+    actor.revoke_device(target.device_id)
+    assert push_sink.wait_for(1), "the revoked device was never told"
+    assert {p["path"] for p in push_sink.received} == {"/target"}
     for ping in push_sink.received:
         assert ping["body"] == b"", "pings stay contentless"
         assert ping["priority"] is None, (

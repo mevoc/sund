@@ -489,3 +489,57 @@ func TestPromoteIsRefusedInAFlatAccount(t *testing.T) {
 		t.Fatalf("promote in a flat account: got %v, want ErrRoleChangeNotApplicable", err)
 	}
 }
+
+// "The last non-revoked admin cannot be demoted" has no self-exception, unlike
+// self-revocation. A device that demotes itself is still in the account and can
+// then neither invite nor promote, so the account would need operator recovery
+// to be usable at all (PRD, Devices → Roles and administration).
+func TestSoleAdminCannotDemoteItself(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	acc, err := st.CreateAccount(ctx, "standard", 0, AdminModeManaged)
+	if err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	token, _, err := st.CreateInvitation(ctx, acc.ID, time.Minute, RoleAdmin)
+	if err != nil {
+		t.Fatalf("CreateInvitation: %v", err)
+	}
+	only, err := st.RegisterDevice(ctx, token, randKey(t), "", "")
+	if err != nil {
+		t.Fatalf("RegisterDevice: %v", err)
+	}
+
+	// Alone in the account, and still refused: it would strand itself.
+	if err := st.SetDeviceRole(ctx, acc.ID, only.ID, RoleMember); !errors.Is(err, ErrLastAdmin) {
+		t.Fatalf("sole admin self-demotion: got %v, want ErrLastAdmin", err)
+	}
+	// Self-revocation, by contrast, is allowed: it empties the account and
+	// strands nobody.
+	if err := st.RevokeDevice(ctx, only.ID, only.ID); err != nil {
+		t.Fatalf("sole admin self-revocation should succeed: %v", err)
+	}
+}
+
+// Several peers converging on the same removal is normal for a consumer whose
+// roster merges tombstones, so all but the first must not see an error.
+func TestRevokeByAnotherDeviceStaysIdempotent(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	a := seedDevice(t, st)
+	token, _, err := st.CreateInvitation(ctx, a.AccountID, time.Minute, RoleAdmin)
+	if err != nil {
+		t.Fatalf("CreateInvitation: %v", err)
+	}
+	b, err := st.RegisterDevice(ctx, token, randKey(t), "", "")
+	if err != nil {
+		t.Fatalf("RegisterDevice: %v", err)
+	}
+
+	if err := st.RevokeDevice(ctx, a.ID, b.ID); err != nil {
+		t.Fatalf("first revoke: %v", err)
+	}
+	if err := st.RevokeDevice(ctx, a.ID, b.ID); err != nil {
+		t.Fatalf("second revoke must be a successful no-op, got %v", err)
+	}
+}

@@ -21,8 +21,13 @@ type Device struct {
 
 // DeviceInfo is one row of the account's device list.
 type DeviceInfo struct {
-	ID           string
-	PublicKey    ed25519.PublicKey
+	ID        string
+	PublicKey ed25519.PublicKey
+	// Role is "admin" or "member". A client MUST surface it: authority over
+	// other devices has to be visible to the devices it is held over, which is
+	// the consumer's half of "no silent administration" (PRD, decision 12).
+	// Sund publishes the field and cannot make a client render it.
+	Role         string
 	PushEndpoint string
 	Capabilities string
 	Created      time.Time
@@ -86,6 +91,7 @@ func (d *Device) ListDevices(ctx context.Context) ([]DeviceInfo, error) {
 		Devices []struct {
 			ID           string `json:"id"`
 			PublicKey    string `json:"public_key"`
+			Role         string `json:"role"`
 			PushEndpoint string `json:"push_endpoint"`
 			Capabilities string `json:"capabilities"`
 			Created      string `json:"created"`
@@ -100,7 +106,8 @@ func (d *Device) ListDevices(ctx context.Context) ([]DeviceInfo, error) {
 	for i, v := range out.Devices {
 		pk, _ := base64.StdEncoding.DecodeString(v.PublicKey)
 		res[i] = DeviceInfo{
-			ID: v.ID, PublicKey: ed25519.PublicKey(pk), PushEndpoint: v.PushEndpoint,
+			ID: v.ID, PublicKey: ed25519.PublicKey(pk), Role: v.Role,
+			PushEndpoint: v.PushEndpoint,
 			Capabilities: v.Capabilities, Created: parseTime(v.Created),
 			LastSeen: parseTime(v.LastSeen), Revoked: v.Revoked,
 		}
@@ -108,7 +115,9 @@ func (d *Device) ListDevices(ctx context.Context) ([]DeviceInfo, error) {
 	return res, nil
 }
 
-// RevokeDevice revokes a device in the account (any member may revoke any other).
+// RevokeDevice revokes a device in the account. In a flat account any device may
+// revoke any other; in a managed one that is admin-only, and a member revoking
+// anything but itself gets 403. Revoking yourself always works.
 func (d *Device) RevokeDevice(ctx context.Context, deviceID string) error {
 	return d.do(ctx, http.MethodPost, "/v1/devices/"+deviceID+"/revoke", nil, nil)
 }

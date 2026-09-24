@@ -110,8 +110,10 @@ func (s *Server) handleRevoke(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Device-list change: wake the account's other devices so they refetch,
-	// drop the revoked device's queues, and rotate/re-key their own.
-	s.wakeAccountDevices(caller.AccountID, targetID)
+	// drop the revoked device's queues, and rotate/re-key their own. Exclude the
+	// caller, which is the device that performed the act — the target is skipped
+	// anyway, being revoked with a cleared endpoint by now.
+	s.wakeAccountDevices(caller.AccountID, caller.ID)
 
 	// And wake the target itself. It is the device the act was performed on and
 	// the one with most reason to be told, and family-beacon's roster spec
@@ -120,7 +122,7 @@ func (s *Server) handleRevoke(w http.ResponseWriter, r *http.Request) {
 	// fails closed. Normal priority deliberately — the urgency hint is a
 	// disclosure (PRD, decision 18) and being revoked does not warrant spending
 	// it.
-	if targetEndpoint != "" {
+	if targetEndpoint != "" && targetID != caller.ID {
 		s.dispatchPing(targetEndpoint, push.Normal)
 	}
 
@@ -175,16 +177,22 @@ func (s *Server) handleCreateInvitation(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusForbidden, "admin role required")
 		return
 	}
+	// An empty body is fine — grants_role then defaults to member in a managed
+	// account, and is normalised to admin in a flat one — but a malformed body is
+	// not, or a typo'd field would silently yield the default role.
 	var req createInvitationRequest
-	if r.Body != nil {
-		// An empty body is fine: grants_role defaults to member in a managed
-		// account and is ignored in a flat one, where every device is an admin.
-		_ = json.NewDecoder(io.LimitReader(r.Body, maxBodyBytes)).Decode(&req)
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxBodyBytes)).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	if req.GrantsRole != "" && req.GrantsRole != store.RoleAdmin && req.GrantsRole != store.RoleMember {
+		writeError(w, http.StatusBadRequest, "grants_role must be admin or member")
+		return
 	}
 	token, inv, err := s.store.CreateInvitation(r.Context(), dev.AccountID, defaultInvitationTTL, req.GrantsRole)
 	if err != nil {
 		log.Printf("create invitation: %v", err)
-		writeError(w, http.StatusBadRequest, "invalid invitation request")
+		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 

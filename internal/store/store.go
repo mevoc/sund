@@ -391,6 +391,20 @@ func (s *Store) CreateInvitation(ctx context.Context, accountID string, ttl time
 	if grantsRole != RoleAdmin && grantsRole != RoleMember {
 		return "", nil, fmt.Errorf("role: want %q or %q, got %q", RoleAdmin, RoleMember, grantsRole)
 	}
+	// In a flat account every device registers as an admin, so a token that said
+	// "member" would misdescribe what it does. Normalise at mint rather than
+	// leaving a row whose grants_role contradicts the role its bearer will get —
+	// the threat model leans on this column meaning something.
+	var mode string
+	if err := s.db.QueryRowContext(ctx, `SELECT admin_mode FROM accounts WHERE id=?`, accountID).Scan(&mode); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil, ErrDeviceNotFound
+		}
+		return "", nil, err
+	}
+	if mode != AdminModeManaged {
+		grantsRole = RoleAdmin
+	}
 	now := time.Now().UTC()
 	expires := now.Add(ttl)
 	if _, err := s.db.ExecContext(ctx,
@@ -503,13 +517,21 @@ func (s *Store) RegisterDevice(ctx context.Context, token string, pub ed25519.Pu
 	role := RoleAdmin
 	if adminMode == AdminModeManaged {
 		role = grantsRole
-		var existing int
+		// "The first device of an account is always an admin" means the first
+		// device ever, not the first live one. Counting only non-revoked devices
+		// would let a member-granting token enrol an ADMIN into a managed account
+		// whose devices had all been revoked — a privilege escalation through a
+		// token that says member, and a second recovery path from the stranded
+		// state with weaker authorization than the operator's promote. Bootstrap
+		// is for an account that has never had a device; recovery is
+		// `sund admin device promote`.
+		var everRegistered int
 		if err := tx.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM devices WHERE account_id=? AND revoked=0`, accountID,
-		).Scan(&existing); err != nil {
+			`SELECT COUNT(*) FROM devices WHERE account_id=?`, accountID,
+		).Scan(&everRegistered); err != nil {
 			return nil, err
 		}
-		if existing == 0 {
+		if everRegistered == 0 {
 			role = RoleAdmin
 		}
 	}
@@ -578,10 +600,11 @@ func (s *Store) UpdatePushEndpoint(ctx context.Context, id, endpoint string) err
 // with its undelivered messages deleted. Afterward the device's signed requests
 // fail and its owned queues are unreachable. Idempotent — revoking an
 // already-revoked device is a no-op that still succeeds.
-// RevokeDevice revokes a device. callerID is the device that asked; pass the
-// target's own id for a self-revocation, which is always permitted — withholding
-// it protects nothing, since a device can discard its own key regardless, and it
-// is the only remedy a member has against an admin (PRD, decision 12).
+//
+// callerID is the device that asked; pass the target's own id for a
+// self-revocation, which is always permitted — withholding it protects nothing,
+// since a device can discard its own key regardless, and it is the only remedy a
+// member has against an admin (PRD, decision 12).
 //
 // The last-admin invariant is enforced here, inside the same transaction as the
 // write: an account never loses its last admin to an act performed on ANOTHER
@@ -596,16 +619,21 @@ func (s *Store) RevokeDevice(ctx context.Context, callerID, id string) error {
 
 	if callerID != id {
 		var accountID, role string
+		var revoked int
 		if err := tx.QueryRowContext(ctx,
-			`SELECT account_id, role FROM devices WHERE id=? AND revoked=0`, id,
-		).Scan(&accountID, &role); err != nil {
+			`SELECT account_id, role, revoked FROM devices WHERE id=?`, id,
+		).Scan(&accountID, &role, &revoked); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return ErrDeviceNotFound
 			}
 			return err
 		}
-		if role == RoleAdmin {
-			if err := assertNotLastAdmin(ctx, tx, accountID, id); err != nil {
+		// Revoking an already-revoked device stays a successful no-op. Several
+		// peers converging on the same removal is the normal case for a consumer
+		// whose roster merges tombstones (family-beacon's Reconciliation does
+		// exactly that), so all but the first must not get an error.
+		if revoked == 0 && role == RoleAdmin {
+			if err := assertNotLastAdmin(ctx, tx, accountID, id, true); err != nil {
 				return err
 			}
 		}
@@ -774,7 +802,13 @@ func (s *Store) SetDeviceRole(ctx context.Context, accountID, deviceID, role str
 		return err
 	}
 	if current == RoleAdmin && role == RoleMember {
-		if err := assertNotLastAdmin(ctx, tx, accountID, deviceID); err != nil {
+		// Demotion has no escape hatch. The empty-account exception that
+		// revocation gets does not transfer: a device that demotes itself is
+		// still there, and can then neither invite nor promote, so the account
+		// needs operator recovery to be usable at all. "The last non-revoked
+		// admin cannot be demoted" is written without a self-exception, unlike
+		// self-revocation, and this is why.
+		if err := assertNotLastAdmin(ctx, tx, accountID, deviceID, false); err != nil {
 			return err
 		}
 	}
@@ -784,10 +818,13 @@ func (s *Store) SetDeviceRole(ctx context.Context, accountID, deviceID, role str
 	return tx.Commit()
 }
 
-// assertNotLastAdmin fails if deviceID is the account's only non-revoked admin
-// while other non-revoked devices remain. An account whose last device is also
-// its last admin is not stranding anyone, so that case is allowed.
-func assertNotLastAdmin(ctx context.Context, tx *sql.Tx, accountID, deviceID string) error {
+// assertNotLastAdmin fails if deviceID is the account's only non-revoked admin.
+//
+// allowIfAccountEmpties relaxes that for revocation: an account whose last
+// device is also its last admin strands nobody, so revoking it is permitted.
+// Demotion passes false, because a demoted device remains in the account and
+// would leave it with members and no way to administer them.
+func assertNotLastAdmin(ctx context.Context, tx *sql.Tx, accountID, deviceID string, allowIfAccountEmpties bool) error {
 	var otherAdmins, otherDevices int
 	if err := tx.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM devices WHERE account_id=? AND revoked=0 AND role=? AND id<>?`,
@@ -797,6 +834,9 @@ func assertNotLastAdmin(ctx context.Context, tx *sql.Tx, accountID, deviceID str
 	}
 	if otherAdmins > 0 {
 		return nil
+	}
+	if !allowIfAccountEmpties {
+		return ErrLastAdmin
 	}
 	if err := tx.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM devices WHERE account_id=? AND revoked=0 AND id<>?`,

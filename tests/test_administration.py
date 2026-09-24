@@ -89,3 +89,64 @@ def test_roles_are_refused_in_a_flat_account(sund_server, new_account):
 
     # And flat behaviour is unchanged: either device may revoke the other.
     assert b.revoke_device_raw(a.device_id).status_code == 200
+
+
+def test_s5c_no_administrative_act_is_silent(sund_server, new_account, push_sink):
+    """S5c — Sund's half of "no silent administration", which is the half that
+    is meant to be testable.
+
+    Every administrative act pings the account's other devices, not only the
+    admins; role is in the list every device reads; and the database records no
+    actor for any of it, because an "X revoked Y" row would be the device-to-device
+    edge the model exists to avoid.
+    """
+    import sqlite3
+
+    _, token = new_account(admin_mode="managed")
+    admin = beaconsim.register_device(
+        sund_server.base_url, token, push_endpoint=push_sink.url("/admin")
+    )
+    member_token = admin.create_invitation(grants_role="member").token
+    member = beaconsim.register_device(
+        sund_server.base_url, member_token, push_endpoint=push_sink.url("/member")
+    )
+    push_sink.wait_for(1)
+    push_sink.received.clear()
+
+    # 1. A mint pings the account's other devices, so an invitation cannot be
+    #    minted unobserved.
+    admin.create_invitation(grants_role="member")
+    assert push_sink.wait_for(1), "minting an invitation must wake the account"
+    assert {p["path"] for p in push_sink.received} == {"/member"}, (
+        "the mint should wake the member, and not the admin that performed it"
+    )
+    push_sink.received.clear()
+
+    # 2. A role change pings every device except the actor — the member is woken
+    #    even though the act concerns a role only an admin can grant.
+    assert admin.set_role(member.device_id, "admin").status_code == 200
+    assert push_sink.wait_for(1), "a role change must wake the account"
+    assert {p["path"] for p in push_sink.received} == {"/member"}
+    for ping in push_sink.received:
+        assert ping["body"] == b"", "pings stay contentless"
+    push_sink.received.clear()
+
+    # 3. The member, woken only by that ping, refetches and sees the new role.
+    assert {d["id"]: d["role"] for d in member.list_devices()}[member.device_id] == "admin"
+
+    # 4. Nothing recorded who did any of it.
+    con = sqlite3.connect(f"file:{sund_server.db_path}?mode=ro", uri=True)
+    try:
+        tables = [r[0] for r in con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )]
+        assert not any("audit" in t or "log" in t for t in tables), (
+            f"no administration log may exist, found {tables}"
+        )
+        for table in tables:
+            cols = [r[1] for r in con.execute(f"PRAGMA table_info({table})")]
+            assert not any("actor" in c or "performed_by" in c for c in cols), (
+                f"{table} must not record who performed an act: {cols}"
+            )
+    finally:
+        con.close()

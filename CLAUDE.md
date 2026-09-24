@@ -54,10 +54,14 @@ intent.
 
 ## Docs
 
-- `docs/Sund-PRD.md` — **current (v0.10).** Two-plane architecture, pseudonymous
+- `docs/Sund-PRD.md` — **current (v0.11).** Two-plane architecture, pseudonymous
   queues, device list/revocation/key bundles, push architecture (UnifiedPush/ntfy
   on Android; vendor APNS gateway on iOS — pluggable provider interface),
-  fingerprint-pinned server address, one-binary stack requirement. New in 0.10:
+  fingerprint-pinned server address, one-binary stack requirement. New in 0.11:
+  two sentences made true (decision 19) — the sender key is *bound by the first
+  SEND*, not supplied at queue creation, and expired messages are now swept from
+  abandoned queues hourly rather than only on drain, so "it stores briefly" holds
+  for queues nobody visits. From 0.10:
   the wake-up **priority hint** is stated rather than denied (decision 18) — a
   ping has always carried one bit beyond "check in", and in family-beacon's shape
   timing plus that bit distinguishes an SOS from a location update. Kept, because

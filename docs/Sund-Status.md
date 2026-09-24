@@ -140,7 +140,10 @@ Behavior details a consumer should know
 
 - Messages: per-message payload cap 64 KiB. TTL is client-supplied seconds,
   clamped to [default 24h, max 7d]; ≤0 uses the default. Expired messages are
-  purged unread on the next drain and do not count against quota.
+  purged unread on the next drain and do not count against quota. An hourly
+  background sweep (`Server.RunPurgeLoop`, started by `serve`) purges queues that
+  are never drained, so an abandoned queue does not hold expired ciphertext
+  indefinitely (PRD 0.11, decision 19).
 - Push wake-up: a ping carries nothing (no payload, no queue id) — only "check
   in". Pings fire on message arrival (queue → owner) and on device-list changes
   (registration and revocation → the account's other devices), asynchronously so

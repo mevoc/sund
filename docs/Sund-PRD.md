@@ -2,7 +2,7 @@ Sund
 
 «A blind strait between your devices.»
 
-Status: PRD v0.10 (Draft) — supersedes PRD 0.9
+Status: PRD v0.11 (Draft) — supersedes PRD 0.10
 
 > Working name: **Sund** (Swedish: a strait between islands — the channel between
 > skerries; also "sound, healthy"). The kernel extracted from Skerry
@@ -99,7 +99,10 @@ Principles
   for Android wake-up), Sund integrates them instead of reinventing them.
 - API-first. Everything reachable via a documented, signed API.
 - Minimal metadata, honestly stated. What the server must store, it stores briefly
-  (TTL) and legibly — documented here, auditable in the schema.
+  (TTL) and legibly — documented here, auditable in the schema. "Briefly" is a
+  promise about the server, not about client behaviour: expiry is enforced by a
+  background sweep as well as on drain, so a queue whose owner never returns does
+  not become indefinite storage.
 
 ---
 
@@ -423,9 +426,18 @@ Queues
 - A queue is a unidirectional channel owned by one recipient device, created by
   that device. On creation the server issues two unrelated random IDs: a
   recipient ID (used by the owner to read/ack) and a sender ID (handed to the
-  sending device out-of-band or via an invitation message). The server stores
-  per-queue authentication keys supplied at creation; sender-side keys are
-  per-queue, not device identity keys.
+  sending device out-of-band or via an invitation message). The recipient key is
+  supplied at creation, by the owner. The **sender key is not**, and cannot be:
+  the recipient mints the queue before it knows anything about its peer, so a
+  queue is created open and the first valid SEND binds the key it carries
+  (`Sund-Sender-Key`). Later sends verify against the bound key and cannot
+  rebind. Both keys are per-queue, never device identity keys.
+
+  The consequence is the one the bearer-credential bullet below turns on: until a
+  queue is bound, its sender ID is a bearer secret — whoever first presents it
+  with a key claims the channel. That is what makes the QR ceremony and the first
+  message through a new queue load-bearing, and why a sender ID handed to the
+  wrong party is worth retiring rather than reusing.
 - Consequence: the server's records do not link a sender device to a queue. The
   who-talks-to-whom graph is not stored.
 - Rotation (client-driven — a security-hygiene practice, not an open question):
@@ -502,7 +514,10 @@ Queues
 
 Messages
 - Send (by sender ID), receive/ack (by recipient ID), per-message TTL. Queues
-  survive offline receivers; expired messages are deleted unread. There is no
+  survive offline receivers; expired messages are deleted unread — on the next
+  drain of that queue, and for queues nobody drains by a background sweep, so the
+  promise holds for abandoned queues too and not only for attended ones. There is
+  no
   per-message delivery status and no read receipt: a message is stored until it
   is acked, at which point its row is deleted, so "delivered" is not a state the
   server keeps. A recipient learns what arrived by draining. Sund gives a sender
@@ -1310,6 +1325,27 @@ stack lock and the second transport-trust mode. Item 12 came in 0.4, item 13 in
     reserve urgency for a class of events rather than one — because Sund cannot
     fix it without making the event undeliverable. Closes the 2026-09-18
     deviation.
+19. Two sentences made true, one by wording and one by code. Both were recorded
+    on 2026-09-18 and both were the same shape as decision 18: a claim the code
+    did not support.
+
+    *The sender key is bound, not supplied.* Queues said "the server stores
+    per-queue authentication keys supplied at creation". The recipient key is;
+    the sender key is not and cannot be, since the recipient mints the queue
+    before it knows anything about its peer. The queue is created open and the
+    first valid SEND binds the key it carries. The guide has described this since
+    0.2 and the PRD declares itself normative where they disagree, so the PRD was
+    the wrong one. Stated now, with the consequence the bearer-credential bullet
+    already depends on: until a queue is bound its sender ID is a bearer secret.
+
+    *Expired means expired, including in queues nobody visits.* "Expired messages
+    are deleted unread" and "it stores briefly (TTL)" were true of any queue a
+    client drains, because a drain purges its own queue first. They were false of
+    an abandoned one, which held expired ciphertext until its owner was revoked
+    or the queue retired. This is closed by building rather than by qualifying,
+    because it is a privacy promise and retracting one should be the last resort:
+    an hourly background sweep now deletes expired rows everywhere. A goroutine,
+    not a service — no new process, nothing to configure, the Holm bar intact.
 
 Open decisions remaining
 

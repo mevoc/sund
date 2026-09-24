@@ -151,3 +151,56 @@ func TestRetireDropsMessages(t *testing.T) {
 		t.Fatalf("retire left %d messages, want 0", len(msgs))
 	}
 }
+
+// An abandoned queue — one nobody drains — must not hold expired ciphertext.
+// DrainMessages covers queues a client still visits; PurgeExpired covers the
+// rest, which is what keeps "it stores briefly (TTL)" true
+// (docs/deviations.md, 2026-09-18).
+func TestPurgeExpiredClearsAbandonedQueues(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	dev := seedDevice(t, st)
+
+	abandoned, err := st.CreateQueue(ctx, dev.ID, randKey(t))
+	if err != nil {
+		t.Fatalf("CreateQueue: %v", err)
+	}
+	live, err := st.CreateQueue(ctx, dev.ID, randKey(t))
+	if err != nil {
+		t.Fatalf("CreateQueue: %v", err)
+	}
+
+	if _, err := st.AppendMessage(ctx, abandoned.RecipientID, []byte("stale"), -time.Minute); err != nil {
+		t.Fatalf("expired append: %v", err)
+	}
+	if _, err := st.AppendMessage(ctx, live.RecipientID, []byte("fresh"), time.Hour); err != nil {
+		t.Fatalf("live append: %v", err)
+	}
+
+	n, err := st.PurgeExpired(ctx)
+	if err != nil {
+		t.Fatalf("PurgeExpired: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("purged %d rows, want 1", n)
+	}
+
+	// The expired row is gone from a queue nobody drained...
+	var count int
+	if err := st.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM messages WHERE queue_id=?`, abandoned.RecipientID,
+	).Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("abandoned queue still holds %d expired messages", count)
+	}
+	// ...and the unexpired one is untouched.
+	msgs, err := st.DrainMessages(ctx, live.RecipientID)
+	if err != nil {
+		t.Fatalf("drain: %v", err)
+	}
+	if len(msgs) != 1 || string(msgs[0].Payload) != "fresh" {
+		t.Fatalf("live message must survive the sweep, got %d", len(msgs))
+	}
+}

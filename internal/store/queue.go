@@ -312,3 +312,17 @@ func scanQueue(sc rowScanner) (*Queue, error) {
 	q.Retired = retired != 0
 	return &q, nil
 }
+
+// PurgeExpired deletes every expired message across all queues and returns how
+// many rows went. DrainMessages already purges the queue it drains, which covers
+// every queue a client still visits; this covers the ones it does not — an
+// abandoned queue would otherwise hold expired ciphertext until its owner was
+// revoked or the queue retired, against "it stores briefly (TTL)" in Principles.
+func (s *Store) PurgeExpired(ctx context.Context) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM messages WHERE expires<=?`, nowStr())
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}

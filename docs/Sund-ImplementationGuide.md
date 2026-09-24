@@ -1,7 +1,12 @@
 Sund — Implementation Guide
 
-Status: v0.6 (Draft) — companion to Sund-PRD.md
+Status: v0.7 (Draft) — companion to Sund-PRD.md
 
+> New in 0.7: PRD 0.9's decision 17 — a per-queue storage ceiling, set by the
+> queue's owner on the transport plane. Adds `POST /v1/quota/{recipient_id}`
+> beside the other recipient-key operations, a third bound on the append check,
+> and scenario S11.
+>
 > New in 0.6: PRD 0.8's decision 16 — a device's storage ceiling is read by the
 > device it caps and by nobody else. `quota_bytes` leaves the device list, a
 > ceiling change pings only the affected device, and `GET /v1/me/quota` stays
@@ -202,6 +207,14 @@ identity appears in these calls; that is the point:
     GET  /v1/recv/{recipient_id}     drain messages
     POST /v1/ack/{recipient_id}      acknowledge/delete
     POST /v1/retire/{recipient_id}   retire queue (rotation)
+    POST /v1/quota/{recipient_id}    set this queue's storage ceiling (PRD 0.9)
+
+The queue ceiling sits on the transport plane, not the management plane, and that
+is the point: it is authenticated by the queue's own recipient key, so no device
+identity enters and the server never learns which device adjusted it. It is also
+the only quota level a client may write — the account and device ceilings are the
+operator's, because those cap someone else, while this one caps only what its own
+owner receives.
 
 Queue security follows the SimpleX pattern: a queue is created "open"; the first
 valid SEND binds the sender's per-queue key. The sender_id travels to the sender
@@ -423,6 +436,10 @@ network, no disk beyond in-memory SQLite. Covers the invariants testable in isol
 - queue ID generation: recipient_id and sender_id unrelated, unpredictable
 - sender-key binding on first SEND; rejection of a second binding attempt
 - quota attribution to the owner account; enforcement at the cap
+- per-queue quota: the owner sets it with the queue's recipient key and nobody
+  else can (a sender key is refused, a device signature is refused); the send
+  response never carries remaining headroom at any level; one queue's ceiling
+  filling leaves the owner's other queues receiving
 - per-device quota: a send that lands exactly on a ceiling succeeds and one byte
   more fails, at each level independently; 0 at either level means no ceiling
   there; stored bytes count ciphertext payload only (no envelope, no base64) and
@@ -542,6 +559,17 @@ S10 Quota bulkhead — two devices in one account, each given its own ceiling we
    `GET /v1/me/quota` on the capped device reports the ceiling it was given.
    Then clear that ceiling (0) and assert the device can again consume up to the
    account cap — 0.4 behaviour, unchanged underneath.
+S11 Per-queue ceiling — one device, two queues, one peer on each. The owner caps
+   the first queue with `POST /v1/quota/{recipient_id}` signed by that queue's
+   recipient key. Fill it until sends are refused; assert the *second* queue
+   still receives, so one hostile peer cannot consume the budget the owner's
+   other peers depend on — the bulkhead one level below S10. Assert the refusal
+   body is the same string as a device-level and an account-level refusal, and
+   that no response at any level carries remaining headroom. Assert the write is
+   the owner's alone: the same call signed with the queue's *sender* key is
+   refused, and so is one signed with the owner device's identity key, since
+   this is a transport-plane operation. Finally retire the capped queue and
+   assert the peer's sends 404 — the remedy a budget is the dial short of.
 
 CI runs both suites on every commit; the unit suite additionally runs as a
 pre-commit hook, installed per working copy with `make hooks` (Toolchain).

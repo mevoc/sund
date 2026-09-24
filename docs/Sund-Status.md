@@ -311,6 +311,14 @@ Run both with `make test-all`.
 
 Not built yet (relative to the PRD / API sketch)
 
+- Per-queue storage quota (PRD 0.9, decision 17): `queues.quota_bytes`,
+  `POST /v1/quota/{recipient_id}` authenticated by the queue's recipient key, and
+  a third bound on the append check — `SUM(LENGTH(payload))` over that one
+  queue's rows, needing none of the joins the other two levels use. Today a queue
+  has no ceiling of its own, so a single peer can consume everything the account
+  ceiling allows. Note for whoever builds it: no response at any level may carry
+  remaining headroom, which would hand a sender the drain-timing signal the
+  refused-send oracle currently makes it probe for.
 - Per-device storage quota (PRD 0.5, decision 13): `devices.quota_bytes`,
   `sund admin device quota`, `GET /v1/me/quota` (self-scoped — the caller's own
   ceiling and stored bytes, never a peer's and never account usage), a ping to

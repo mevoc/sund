@@ -9,7 +9,7 @@ encrypted messages between a user's devices, plus the device management that
 makes that trustworthy. The server transports sealed envelopes; it never
 interprets them. (Working name.)
 
-**Spec:** [`docs/Sund-PRD.md`](docs/Sund-PRD.md) (current, v0.12) ·
+**Spec:** [`docs/Sund-PRD.md`](docs/Sund-PRD.md) (current, v0.13) ·
 [`docs/Sund-ImplementationGuide.md`](docs/Sund-ImplementationGuide.md) ·
 [`docs/Sund-PriorArt.md`](docs/Sund-PriorArt.md)
 
@@ -33,6 +33,8 @@ endpoints:
 | `GET /v1/devices`           | device signature    | list the account's devices           |
 | `POST /v1/devices/{id}/revoke` | device signature | revoke a device (kills it + its queues) |
 | `POST /v1/devices/{id}/role` | device signature  | promote/demote a device (admin only) |
+| `POST /v1/statements`       | device signature    | append an admin statement (admin only) |
+| `GET /v1/statements/{since}` | device signature   | read the account's statement log      |
 | `GET /v1/me/quota`          | device signature    | own storage ceiling and usage        |
 | `POST /v1/invitations`      | device signature    | mint a token to pair another device  |
 | `GET /v1/invitations`       | device signature    | list outstanding invitations         |

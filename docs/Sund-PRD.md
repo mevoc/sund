@@ -2,7 +2,7 @@ Sund
 
 «A blind strait between your devices.»
 
-Status: PRD v0.12 (Draft) — supersedes PRD 0.11
+Status: PRD v0.13 (Draft) — supersedes PRD 0.12
 
 > Working name: **Sund** (Swedish: a strait between islands — the channel between
 > skerries; also "sound, healthy"). The kernel extracted from Skerry
@@ -383,6 +383,43 @@ Devices
   A consumer SHOULD surface a ceiling change and a persistent refusal to the
   user rather than retrying quietly; as with the administration model, Sund can
   publish the fact and cannot make a client show it.
+- Administrative statements (optional, decision 21). An account has an
+  append-only log of opaque, size-capped blobs, written by admins and readable by
+  every device in the account. Sund never parses one: it stores bytes and serves
+  them back in order, exactly as it does a key bundle.
+
+  It exists because decision 12's model binds the account's own devices and not
+  the host. A hostile host can fabricate a revocation, and a forged one is enough
+  to make honest peers drop a device's queues and re-key. If the acting admin
+  signs a statement describing what it did, and peers verify that signature
+  against the device list, the host can no longer *invent* an administrative act
+  — it can only refuse to serve the statements, which is denial of service, a
+  thing it could always do.
+
+  **The blob must be encrypted by the client, not merely signed**, and this is
+  the whole reason the feature took three revisions to arrive. A plaintext signed
+  statement says "device X did A to device Y", which is precisely the
+  device→device edge the data model refuses and the blindness audit exists to
+  prove absent — storing one would hand the host the administration graph the
+  rest of the design is built to withhold. Encrypted to the account's devices, it
+  is one more opaque payload, and the only parties who can verify it are the
+  parties who need to.
+
+  What it does not do, stated because signing invites the assumption that it
+  does: it defeats *forgery*, not *suppression*. The host serves the log, so it
+  can withhold entries or truncate the tail, and a client cannot distinguish that
+  from an account where nothing happened. Chaining statements client-side makes a
+  gap in the middle detectable; truncation at the end is not, and no
+  server-stored log can fix that. This is the same limit key bundles have, and it
+  is why the server keeps the liveness half regardless: it must actually stop
+  serving a revoked device.
+
+  The cost, which is new: a durable record of administrative *activity* — how
+  many statements an account has and when they were written — where the model
+  previously kept none. Bounded rather than unbounded: an account retains its
+  most recent statements up to a cap, oldest dropped, so the window a host can
+  observe is finite and the store cannot grow without limit. Sequence numbers are
+  per account, not global, so one account's log never reveals another's volume.
 - Key bundles: each device may publish a small, size-capped, opaque blob of
   client-side key material (e.g. prekeys for X3DH-style async session setup),
   retrievable by other devices in the account. The server never interprets it —
@@ -561,6 +598,8 @@ accounts     — id, created, quota (class label), quota_bytes, status, admin_mo
 devices      — id, account_id, public_key, role, push_endpoint, capabilities,
                quota_bytes, created, last_seen, revoked
 bundles      — device_id, blob (opaque, size-capped), updated
+statements   — account_id, seq (per account), blob (opaque, size-capped),
+               created
 invitations  — id, token_hash, account_id, created, expires, consumed, revoked,
                grants_role
 queues       — recipient_id, sender_id, owner_device, recipient_key, sender_key,
@@ -1362,6 +1401,34 @@ stack lock and the second transport-trust mode. Item 12 came in 0.4, item 13 in
     closes what 0.8 raised as an open decision rather than folding it in quietly,
     since it is a wire-format change: a client that displayed a peer's endpoint
     will now see it empty.
+21. Administrative statements, and why they are encrypted rather than merely
+    signed. Decision 12 binds an account's own devices and not the host, which
+    can still fabricate a revocation — and a forged one makes honest peers drop a
+    device's queues and re-key. An acting admin may now write a statement of what
+    it did into a per-account append-only log, which peers read and verify
+    against the device list; the host can no longer invent an act.
+
+    The part that took three revisions to get right: the blob is **encrypted by
+    the client**, not just signed. A plaintext signed statement is literally the
+    "X did A to Y" record the data model refuses and the S8 audit exists to prove
+    absent, so storing one would have handed the host the administration graph
+    the whole design withholds — a feature meant to constrain the host, paid for
+    by telling it more. Encrypted, it is one more opaque payload, and the only
+    parties who can verify it are the ones who need to.
+
+    Sund defines no statement format, for the reason it defines no bundle format:
+    what an act means is the consumer's protocol, and Sund storing bytes is what
+    keeps it out of that. Optional throughout — an account that writes no
+    statements is unaffected, and decision 12's gates do not depend on it.
+
+    Honest limits. It defeats forgery, not suppression: the host serves the log
+    and can withhold or truncate it, and a client cannot tell that from an
+    account where nothing happened. Chaining makes a mid-log gap detectable;
+    tail truncation is not, by any server-stored log. And the cost is real — a
+    durable record of administrative *activity*, count and timing, where the
+    model previously kept none. Bounded by a per-account retention cap so the
+    observable window is finite, with per-account sequence numbers so one
+    account's log never reveals another's volume.
 
 Open decisions remaining
 
@@ -1370,20 +1437,14 @@ Open decisions remaining
    batching/jitter to blunt timing analysis at the gateway. The architecture
    itself is settled in Push architecture; "no lock-in" is structurally
    unattainable on iOS — only containment is.
-2. Signed administrative statements. A role change or revocation is a server-side
-   fact, which a hostile host can fabricate — a forged revocation is enough to
-   make honest peers drop a device's queues and re-key. The fix is for the acting
-   admin to sign the statement, for Sund to store it opaquely, and for peers to
-   verify it against the device list — exactly how key bundles are already stored
-   and verified, so no server-side crypto is added and the dead-drop rule holds.
-   The server would keep the liveness half: it must actually stop serving a
-   revoked device, and it can deny service regardless. Open because the statement
-   format is a client-protocol decision (as the bundle format is) and because no
-   consumer has yet asked for administration that survives a hostile host.
-   Deferred, not rejected: 0.4's model is a mistake-and-member defence and says
-   so.
 
 Resolved since first listed as open (no longer decisions):
+
+- Signed administrative statements — closed in 0.13 by decision 21. Sund stores
+  and serves an opaque per-account log; the statement format stays the
+  consumer's, as the bundle format is. The one thing the original framing got
+  wrong: "signed" is not enough, because a plaintext signed statement is the
+  actor→target record the data model refuses. It must be encrypted too.
 
 - Whether `push_endpoint` belongs in the device-list response — closed in 0.12
   by decision 20: it does not, except for the device that set it.

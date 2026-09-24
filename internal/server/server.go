@@ -79,6 +79,12 @@ func New(cfg Config, st *store.Store) *Server {
 	mux.Handle("POST /v1/invitations/{id}/revoke", s.requireSignature(http.HandlerFunc(s.handleRevokeInvitation)))
 	mux.Handle("PUT /v1/me/push", s.requireSignature(http.HandlerFunc(s.handleUpdatePush)))
 	mux.Handle("GET /v1/me/quota", s.requireSignature(http.HandlerFunc(s.handleGetQuota)))
+	// Administrative statements: opaque, append-only, per account (decision 21).
+	mux.Handle("POST /v1/statements", s.requireSignature(http.HandlerFunc(s.handleAppendStatement)))
+	// since is a path segment, not a query parameter: the signing string covers
+	// method and path only, so a query filter would be the one unsigned input in
+	// a signed API.
+	mux.Handle("GET /v1/statements/{since}", s.requireSignature(http.HandlerFunc(s.handleListStatements)))
 	// Queue creation is the plane meeting point: signed by device identity so
 	// the server records ownership (quota + wake-up).
 	mux.Handle("POST /v1/queues", s.requireSignature(http.HandlerFunc(s.handleCreateQueue)))

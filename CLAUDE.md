@@ -54,12 +54,17 @@ intent.
 
 ## Docs
 
-- `docs/Sund-PRD.md` — **current (v0.12).** Two-plane architecture, pseudonymous
+- `docs/Sund-PRD.md` — **current (v0.13).** Two-plane architecture, pseudonymous
   queues, device list/revocation/key bundles, push architecture (UnifiedPush/ntfy
   on Android; vendor APNS gateway on iOS — pluggable provider interface),
   fingerprint-pinned server address, one-binary stack requirement. **Pinned TLS
   is the flagless default** since 2026-09-24 — `serve` generates its own CA on
   first run; `--http` / `SUND_HTTP` opts out for WebPKI behind a proxy. New in
+  0.13: **administrative statements** (decision 21) — an append-only per-account
+  log of opaque blobs, so a peer can verify an act against the device list
+  instead of trusting the server. The blob is signed *and encrypted*: plaintext
+  would make the log the actor-to-target record the data model refuses. Defeats
+  forgery, not suppression. In
   0.12: a peer's `push_endpoint` is withheld (decision 20) — it was the one
   *capability* in the member-visible set rather than a disclosure, since a
   wake-up URL on a bearer-URL distributor is the ability to wake or spam that

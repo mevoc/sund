@@ -27,6 +27,9 @@ type Queue struct {
 	SenderKey    ed25519.PublicKey
 	Created      time.Time
 	Retired      bool
+	// QuotaBytes caps the stored payloads held in this queue; 0 means no ceiling.
+	// The owner sets it with this queue's recipient key (PRD 0.10, decision 17).
+	QuotaBytes int64
 }
 
 // Message is one stored ciphertext envelope awaiting delivery.
@@ -71,7 +74,7 @@ func (s *Store) CreateQueue(ctx context.Context, ownerDevice string, recipientKe
 	}, nil
 }
 
-const queueColumns = `SELECT recipient_id, sender_id, owner_device, recipient_key, sender_key, created, retired FROM queues`
+const queueColumns = `SELECT recipient_id, sender_id, owner_device, recipient_key, sender_key, created, retired, quota_bytes FROM queues`
 
 // GetQueueByRecipient looks up a queue by its recipient (owner) id.
 func (s *Store) GetQueueByRecipient(ctx context.Context, recipientID string) (*Queue, error) {
@@ -142,19 +145,22 @@ func (s *Store) AppendMessage(ctx context.Context, recipientID string, payload [
 	}
 	defer tx.Rollback()
 
-	// Resolve the quota attributed to this queue's owner account.
+	// Resolve all three storage ceilings in one pass: the queue's own, its owner
+	// device's, and the owner's account (PRD 0.10, Accounts). 0 means no ceiling
+	// at that level, so a deployment that sets none behaves as it always did.
 	var (
-		accountID  string
-		quotaBytes int64
+		accountID                             string
+		queueQuota, deviceQuota, accountQuota int64
+		ownerDevice                           string
 	)
 	err = tx.QueryRowContext(ctx,
-		`SELECT d.account_id, a.quota_bytes
+		`SELECT d.account_id, q.owner_device, q.quota_bytes, d.quota_bytes, a.quota_bytes
 		   FROM queues q
 		   JOIN devices d ON q.owner_device = d.id
 		   JOIN accounts a ON d.account_id = a.id
 		  WHERE q.recipient_id = ?`,
 		recipientID,
-	).Scan(&accountID, &quotaBytes)
+	).Scan(&accountID, &ownerDevice, &queueQuota, &deviceQuota, &accountQuota)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrQueueNotFound
 	}
@@ -162,7 +168,41 @@ func (s *Store) AppendMessage(ctx context.Context, recipientID string, payload [
 		return nil, err
 	}
 
-	if quotaBytes > 0 {
+	nowS := now.Format(time.RFC3339)
+	size := int64(len(payload))
+
+	// Narrowest first: the queue level needs no joins at all, so a send refused
+	// there costs the least to refuse. Every level uses the same rule — expired
+	// rows excluded, and landing exactly on a ceiling succeeds.
+	if queueQuota > 0 {
+		var used int64
+		if err := tx.QueryRowContext(ctx,
+			`SELECT COALESCE(SUM(LENGTH(payload)), 0) FROM messages
+			  WHERE queue_id = ? AND expires > ?`,
+			recipientID, nowS,
+		).Scan(&used); err != nil {
+			return nil, err
+		}
+		if used+size > queueQuota {
+			return nil, ErrQuotaExceeded
+		}
+	}
+	if deviceQuota > 0 {
+		var used int64
+		if err := tx.QueryRowContext(ctx,
+			`SELECT COALESCE(SUM(LENGTH(m.payload)), 0)
+			   FROM messages m
+			   JOIN queues q ON m.queue_id = q.recipient_id
+			  WHERE q.owner_device = ? AND m.expires > ?`,
+			ownerDevice, nowS,
+		).Scan(&used); err != nil {
+			return nil, err
+		}
+		if used+size > deviceQuota {
+			return nil, ErrQuotaExceeded
+		}
+	}
+	if accountQuota > 0 {
 		var used int64
 		if err := tx.QueryRowContext(ctx,
 			`SELECT COALESCE(SUM(LENGTH(m.payload)), 0)
@@ -170,11 +210,11 @@ func (s *Store) AppendMessage(ctx context.Context, recipientID string, payload [
 			   JOIN queues q ON m.queue_id = q.recipient_id
 			   JOIN devices d ON q.owner_device = d.id
 			  WHERE d.account_id = ? AND m.expires > ?`,
-			accountID, now.Format(time.RFC3339),
+			accountID, nowS,
 		).Scan(&used); err != nil {
 			return nil, err
 		}
-		if used+int64(len(payload)) > quotaBytes {
+		if used+size > accountQuota {
 			return nil, ErrQuotaExceeded
 		}
 	}
@@ -258,7 +298,7 @@ func scanQueue(sc rowScanner) (*Queue, error) {
 		created string
 		retired int
 	)
-	if err := sc.Scan(&q.RecipientID, &q.SenderID, &q.OwnerDevice, &rkey, &skey, &created, &retired); err != nil {
+	if err := sc.Scan(&q.RecipientID, &q.SenderID, &q.OwnerDevice, &rkey, &skey, &created, &retired, &q.QuotaBytes); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrQueueNotFound
 		}

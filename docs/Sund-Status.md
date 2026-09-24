@@ -1,12 +1,12 @@
 Sund — Implementation Status
 
 Status: v0.1 (snapshot of the code at the storage-quota commit, 2026-07-20;
-"Not built yet", the schema block and multi-tenancy refreshed against PRD 0.7
-on 2026-09-23)
-— describes the code, not the plan
+"Not built yet", the schema block and multi-tenancy refreshed against PRD 0.10
+on 2026-09-24, when the three quota levels were built) — describes the code, not
+the plan
 
-This is a snapshot of what the Sund binary actually does as of the storage-quota
-commit, written for the people who build on it — chiefly family-beacon
+This is a snapshot of what the Sund binary actually does as of the three-level
+quota commit, written for the people who build on it — chiefly family-beacon
 (github.com/mevoc/family-beacon), the first consumer — and for contributors. Where it and the PRD disagree, the PRD
 (`Sund-PRD.md`) is the design intent and this document is the ground truth of the
 implementation. Rationale lives in the PRD and `Sund-ImplementationGuide.md`; this
@@ -20,13 +20,13 @@ At a glance
   binary, one database file. Go 1.25+ (floor set by the driver).
 - Both planes are implemented: a management plane (device identity) and a
   transport plane (pseudonymous blind queues).
-- Also built: push wake-up, device revocation, per-account storage quota.
+- Also built: push wake-up, device revocation, and storage quota at all three
+  levels — account, device and queue (PRD 0.10, decisions 13, 16 and 17).
 - Tests: a Go unit suite and a Python system suite (`beaconsim`) that drives the
-  real compiled binary with real crypto. ~88 Go cases, 48 system tests, both
+  real compiled binary with real crypto. ~94 Go cases, 52 system tests, both
   per-commit. Includes the blindness audit (S8) and operator-survival (S9).
 - Not yet built: the account administration model of PRD 0.4 (administration
-  modes, device roles), the per-device storage quota of PRD 0.5, iOS push
-  provider, metrics. TLS/fingerprint pinning is
+  modes, device roles), iOS push provider, metrics. TLS/fingerprint pinning is
   implemented as an opt-in mode (`serve --tls-dir`); making it the default is a
   follow-up. See "Not built yet".
 
@@ -57,12 +57,12 @@ Data model (actual SQLite schema)
 
     accounts     id, created, quota (class label), status, quota_bytes
     devices      id, account_id, public_key, push_endpoint, capabilities,
-                 created, last_seen, revoked
+                 created, last_seen, revoked, quota_bytes
     bundles      device_id (pk), blob (opaque, size-capped), updated
     invitations  token_hash (pk), id, account_id, created, expires, consumed,
                  revoked
     queues       recipient_id (pk), sender_id, owner_device, recipient_key,
-                 sender_key (null until bound), created, retired
+                 sender_key (null until bound), created, retired, quota_bytes
     messages     seq (autoincrement), id, queue_id (= a queue's recipient_id),
                  payload (ciphertext), received_at, expires
 
@@ -101,6 +101,8 @@ HTTP API (implemented endpoints)
     GET  /v1/recv/{recipient_id}       per-queue recipient key  drain the queue
     POST /v1/ack/{recipient_id}        per-queue recipient key  delete acked messages
     POST /v1/retire/{recipient_id}     per-queue recipient key  retire (rotation)
+    POST /v1/quota/{recipient_id}      per-queue recipient key  set queue ceiling
+    GET  /v1/me/quota                  device signature        own ceiling + usage
 
 Request/response shapes are JSON; payloads are base64 ciphertext. See
 `Sund-ImplementationGuide.md` for the sketch and `tests/beaconsim/` for a working
@@ -157,13 +159,29 @@ Behavior details a consumer should know
   exactly PRD 0.4's `flat` mode, which is also what family-beacon's roster spec
   requires. A revoked device stays listed, flagged
   revoked.
-- Quota: per account, counted on the owner (recipient) side. A send that would
-  exceed `quota_bytes` is refused with 507; space frees as messages are acked or
-  expire. **The cap is account-wide only** — there is no per-device ceiling, so
-  one device's backlog consumes headroom its peers share. PRD 0.5 adds a second,
-  per-device level; none of it is implemented. Set via
-  `sund admin account create --quota-bytes N` or a named class
-  (standard = 64 MiB, large = 1 GiB). 0 = unlimited.
+- Quota: three ceilings, all counted on the owner (recipient) side — the
+  account's, the owning device's, and the queue's. A send is refused with 507 if
+  it would take *any* of them past its limit; the boundary is inclusive, so
+  landing exactly on a ceiling succeeds. 0 at a level means no ceiling there, so
+  a deployment that sets none behaves as it did before the levels existed.
+  Expired-but-unpurged rows do not count, and space frees as messages are acked
+  or expire. Ceilings are not retroactive: lowering one refuses further sends and
+  deletes nothing.
+  - The **refusal body is the same string at every level** ("storage quota
+    exceeded"), so a sender cannot tell which tripped.
+  - The **account** ceiling is set at provisioning:
+    `sund admin account create --quota-bytes N` or a named class
+    (standard = 64 MiB, large = 1 GiB).
+  - The **device** ceiling is the operator's — `sund admin device quota <id>
+    [<bytes>]`, which sets or shows it and pings the capped device. It has no API
+    endpoint, because capping a device silences someone else, and it is
+    deliberately absent from the device list a peer reads.
+  - The **queue** ceiling is the owner's own: `POST /v1/quota/{recipient_id}`,
+    authenticated by the queue's recipient key, so no device identity is
+    involved. Capping your own inbound channel limits only what you receive.
+  - `GET /v1/me/quota` returns the calling device's ceiling, its stored bytes and
+    the account ceiling. It is self-scoped and never reports account *usage*.
+    No response at any level carries remaining headroom.
 - Invitations: single-use, default 15-minute TTL, atomically consumed by the
   first registration. Minting returns a non-secret invitation id alongside the
   token; a device can list its account's outstanding (unconsumed, unrevoked,
@@ -302,7 +320,9 @@ Test coverage
   device-to-device invitation, send/recv/ack, offline backlog, sender-key binding,
   push wake-up (contentless, SOS priority, device-list change), revocation (S5),
   tenant isolation (S7 — management plane scoped, transport plane not, the
-  cross-account send asserted positively), the blindness audit (S8), operator
+  cross-account send asserted positively), the three quota levels (S11 — the
+  per-queue bulkhead, the refusal naming no level, and that only the owner may
+  cap a queue), the blindness audit (S8), operator
   survival — backup/restore and restart (S9), and storage quota.
 
 Run both with `make test-all`.
@@ -311,29 +331,6 @@ Run both with `make test-all`.
 
 Not built yet (relative to the PRD / API sketch)
 
-- Per-queue storage quota (PRD 0.9, decision 17): `queues.quota_bytes`,
-  `POST /v1/quota/{recipient_id}` authenticated by the queue's recipient key, and
-  a third bound on the append check — `SUM(LENGTH(payload))` over that one
-  queue's rows, needing none of the joins the other two levels use. Today a queue
-  has no ceiling of its own, so a single peer can consume everything the account
-  ceiling allows. Note for whoever builds it: no response at any level may carry
-  remaining headroom, which would hand a sender the drain-timing signal the
-  refused-send oracle currently makes it probe for.
-- Per-device storage quota (PRD 0.5, decision 13): `devices.quota_bytes`,
-  `sund admin device quota`, `GET /v1/me/quota` (self-scoped — the caller's own
-  ceiling and stored bytes, never a peer's and never account usage), a ping to
-  the capped device on a ceiling change, and the second ceiling in the append
-  path. `quota_bytes` is deliberately **not** in the device-list response
-  (PRD 0.8, decision 16). The 507 body must also stop naming the account level
-  (it currently reads "account storage quota exceeded"), since a sender must not
-  learn which ceiling
-  tripped. The concurrency caveat below applies per-device exactly as it does
-  per-account. The enforcement query in `internal/store/queue.go` already joins
-  queues → devices → accounts and sums per account; the device level is the same
-  query filtered on `q.owner_device` instead of `d.account_id`. So: a column, a
-  CLI command, one self-scoped read endpoint, a new ping trigger and a second
-  bound on an existing check — no new linkage, the join already being there.
-  Today the account cap is the only ceiling.
 - Account administration (PRD 0.4, decision 12): `accounts.admin_mode`,
   `devices.role`, `invitations.grants_role`, `POST /v1/devices/{id}/role`, the
   admin-only checks on revoke and invitation minting, the last-admin invariant,

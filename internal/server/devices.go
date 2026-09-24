@@ -222,3 +222,43 @@ func (s *Server) handleListDevices(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"devices": views})
 }
+
+type quotaView struct {
+	QuotaBytes        int64 `json:"quota_bytes"`         // this device's ceiling; 0 = none
+	StoredBytes       int64 `json:"stored_bytes"`        // live payloads in queues it owns
+	AccountQuotaBytes int64 `json:"account_quota_bytes"` // the shared ceiling; 0 = none
+}
+
+// handleGetQuota returns the calling device's own storage ceiling and usage.
+// Self-scoped by construction: it reads the authenticated device and takes no
+// target, so a member cannot ask about a peer. That is the whole point — a
+// ceiling is withheld from peers (PRD, decision 16), and this read is what lets
+// the capped device tell "I am full" from "someone capped me".
+//
+// It carries the account ceiling, a constant that binds every device equally, so
+// a device can explain a refusal it hits while under its own ceiling. It must
+// never carry account *usage*, which would be an activity signal about peers.
+func (s *Server) handleGetQuota(w http.ResponseWriter, r *http.Request) {
+	dev, ok := deviceFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	used, err := s.store.DeviceStoredBytes(r.Context(), dev.ID)
+	if err != nil {
+		log.Printf("device stored bytes: %v", err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	accountQuota, err := s.store.AccountQuotaBytes(r.Context(), dev.AccountID)
+	if err != nil {
+		log.Printf("account quota: %v", err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	writeJSON(w, http.StatusOK, quotaView{
+		QuotaBytes:        dev.QuotaBytes,
+		StoredBytes:       used,
+		AccountQuotaBytes: accountQuota,
+	})
+}

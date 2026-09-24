@@ -130,6 +130,12 @@ class Client:
         r = self._request("POST", f"/v1/devices/{device_id}/revoke")
         r.raise_for_status()
 
+    def get_quota(self) -> dict:
+        """This device's own ceiling and usage. Self-scoped: no peer can be named."""
+        r = self.get("/v1/me/quota")
+        r.raise_for_status()
+        return r.json()
+
     def publish_bundle(self, blob: bytes) -> None:
         """Publish this device's opaque key bundle (a dead-drop for async pairing)."""
         body = json.dumps({"bundle": base64.b64encode(blob).decode()}).encode()
@@ -196,6 +202,15 @@ class Queue:
             {"id": m["id"], "plaintext": box.decrypt(base64.b64decode(m["payload"]))}
             for m in r.json()["messages"]
         ]
+
+    def set_quota(self, quota_bytes: int) -> httpx.Response:
+        """Set this queue's storage ceiling; 0 removes it.
+
+        Authenticated by the queue's recipient key, not a device identity: the
+        owner caps its own inbound channel (PRD 0.10, decision 17).
+        """
+        body = json.dumps({"quota_bytes": quota_bytes}).encode()
+        return self._request("POST", f"/v1/quota/{self.recipient_id}", body)
 
     def ack(self, ids: list[str]) -> int:
         body = json.dumps({"ids": ids}).encode()

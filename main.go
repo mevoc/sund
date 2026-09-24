@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -146,11 +147,87 @@ func runCert(args []string) error {
 	return nil
 }
 
-// runAdmin handles the operator surface. Only `account create` exists so far.
+// runAdmin handles the operator surface.
 func runAdmin(args []string) error {
-	if len(args) < 2 || args[0] != "account" || args[1] != "create" {
-		return fmt.Errorf("usage: sund admin account create [--db sund.db] [--quota standard] [--ttl 15m] [--json]")
+	switch {
+	case len(args) >= 2 && args[0] == "account" && args[1] == "create":
+		return runAdminAccountCreate(args[2:])
+	case len(args) >= 2 && args[0] == "device" && args[1] == "quota":
+		return runAdminDeviceQuota(args[2:])
 	}
+	return fmt.Errorf("usage:\n" +
+		"  sund admin account create [--db sund.db] [--quota standard] [--ttl 15m] [--json]\n" +
+		"  sund admin device quota <device-id> [<bytes>] [--db sund.db]")
+}
+
+// runAdminDeviceQuota sets or shows a device's storage ceiling. It is the
+// operator's write and has no API endpoint, because capping a device silences
+// someone else (PRD 0.10, decision 13). Changing it pings the capped device —
+// and only that device, since no other can read the result (decision 16) — so
+// that a host cannot hold a power over a device silently.
+func runAdminDeviceQuota(args []string) error {
+	fs := flag.NewFlagSet("admin device quota", flag.ExitOnError)
+	dbPath := fs.String("db", envOr("SUND_DB", "sund.db"), "path to the SQLite database file (env: SUND_DB)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	rest := fs.Args()
+	if len(rest) < 1 {
+		return fmt.Errorf("usage: sund admin device quota <device-id> [<bytes>] [--db sund.db]")
+	}
+	deviceID := rest[0]
+
+	st, err := store.Open(*dbPath)
+	if err != nil {
+		return fmt.Errorf("open db: %w", err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+
+	dev, err := st.GetDevice(ctx, deviceID)
+	if err != nil {
+		return fmt.Errorf("device %s: %w", deviceID, err)
+	}
+
+	if len(rest) == 1 { // show
+		used, err := st.DeviceStoredBytes(ctx, deviceID)
+		if err != nil {
+			return fmt.Errorf("stored bytes: %w", err)
+		}
+		if dev.QuotaBytes == 0 {
+			fmt.Printf("%s: no ceiling; %d bytes stored\n", deviceID, used)
+		} else {
+			fmt.Printf("%s: %d bytes ceiling; %d bytes stored\n", deviceID, dev.QuotaBytes, used)
+		}
+		return nil
+	}
+
+	bytes, err := strconv.ParseInt(rest[1], 10, 64)
+	if err != nil || bytes < 0 {
+		return fmt.Errorf("bytes: want a non-negative integer, got %q", rest[1])
+	}
+	if err := st.SetDeviceQuota(ctx, deviceID, bytes); err != nil {
+		return fmt.Errorf("set quota: %w", err)
+	}
+
+	// Tell the device it was capped. Best-effort, like every other ping: if the
+	// distributor is unreachable the device learns on its next /v1/me/quota,
+	// which clients refetch on any ping (PRD, propagation).
+	if dev.PushEndpoint != "" {
+		pinger := push.NewUnifiedPush(&http.Client{Timeout: 10 * time.Second})
+		if err := pinger.Ping(ctx, dev.PushEndpoint, push.Normal); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not ping %s: %v\n", deviceID, err)
+		}
+	}
+	if bytes == 0 {
+		fmt.Printf("%s: ceiling removed\n", deviceID)
+	} else {
+		fmt.Printf("%s: ceiling set to %d bytes\n", deviceID, bytes)
+	}
+	return nil
+}
+
+func runAdminAccountCreate(args []string) error {
 
 	fs := flag.NewFlagSet("admin account create", flag.ExitOnError)
 	dbPath := fs.String("db", envOr("SUND_DB", "sund.db"), "path to the SQLite database file (env: SUND_DB)")
@@ -158,7 +235,7 @@ func runAdmin(args []string) error {
 	quotaBytes := fs.Int64("quota-bytes", 0, "explicit storage quota in bytes (0 = class default)")
 	ttl := fs.Duration("ttl", 15*time.Minute, "invitation time-to-live")
 	asJSON := fs.Bool("json", false, "emit machine-readable JSON")
-	if err := fs.Parse(args[2:]); err != nil {
+	if err := fs.Parse(args); err != nil {
 		return err
 	}
 

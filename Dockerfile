@@ -28,10 +28,13 @@ LABEL org.opencontainers.image.source="https://github.com/mevoc/sund" \
 COPY --from=build /out/sund /sund
 COPY --from=build --chown=65532:65532 /data /data
 
-# Defaults suit a container: listen on all interfaces, keep the database on the
-# /data volume. Override with SUND_ADDR / SUND_DB or flags.
+# Defaults suit a container: listen on all interfaces, keep the database and the
+# pinned CA on the /data volume so both survive a container replacement. Pinned
+# TLS is the default; set SUND_HTTP=1 to serve plain HTTP behind a
+# TLS-terminating proxy (WebPKI mode). Override with flags or these vars.
 ENV SUND_ADDR=:5870 \
-    SUND_DB=/data/sund.db
+    SUND_DB=/data/sund.db \
+    SUND_TLS_DIR=/data/tls
 
 EXPOSE 5870
 VOLUME ["/data"]

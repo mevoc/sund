@@ -28,10 +28,22 @@ CI). Those are tracked in `Sund-Status.md` → "Not built yet".
 - Why: the first deployment target (family-beacon) recommends WebPKI mode behind a
   proxy, and shipping HTTP-by-default kept the image and compose file trivial. The
   flip was deferred as a follow-up (`Sund-Status.md` → "Not built yet").
-- Status: open. Either make pinned TLS the flagless default (auto-generating the CA
-  in a data dir, and enabling it in the image) or change the PRD to say the
-  *deployment recommendation* is pinned mode while the binary's default is the
-  operator's choice.
+- Status: closed 2026-09-24 by taking the first option — the spec was right and
+  the binary was lagging. `sund serve` now serves pinned TLS with no flags,
+  generating the CA and leaf on first run in `--tls-dir` (default `tls/`, env
+  `SUND_TLS_DIR`); the image and compose file put that directory on the `/data`
+  volume so the address clients pinned survives a container replacement. Plain
+  HTTP is still there for WebPKI mode behind a TLS-terminating proxy, as
+  `--http` / `SUND_HTTP` — an explicit choice rather than what you get by not
+  choosing.
+
+  `sund health` follows the same default and skips certificate verification: it
+  asks "are you up", not "are you who you claim", and usually over loopback
+  inside a container. Pinning is the client's job, against the fingerprint in the
+  server address. The system suite's plain-HTTP fixture now passes `--http`
+  explicitly, which is itself the evidence the default flipped; a new scenario
+  starts the binary with no flags at all and asserts HTTPS, a generated CA, and
+  that a plain-HTTP request gets no healthy answer.
 
 ## 2026-09-18 — Sender key is bound on first SEND, not supplied at queue creation
 

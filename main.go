@@ -13,6 +13,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -82,8 +83,10 @@ func runServe(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	addr := fs.String("addr", envOr("SUND_ADDR", ":5870"), "listen address (env: SUND_ADDR)")
 	dbPath := fs.String("db", envOr("SUND_DB", "sund.db"), "path to the SQLite database file (env: SUND_DB)")
-	tlsDir := fs.String("tls-dir", envOr("SUND_TLS_DIR", ""),
-		"serve HTTPS with fingerprint-pinned certs stored here; empty = plain HTTP (env: SUND_TLS_DIR)")
+	tlsDir := fs.String("tls-dir", envOr("SUND_TLS_DIR", defaultTLSDir),
+		"directory holding the pinned CA and leaf; created on first run (env: SUND_TLS_DIR)")
+	plainHTTP := fs.Bool("http", envOr("SUND_HTTP", "") != "",
+		"serve plain HTTP instead of pinned TLS — for WebPKI mode behind a TLS-terminating proxy (env: SUND_HTTP)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -105,18 +108,25 @@ func runServe(args []string) error {
 	// itself; this is what keeps "it stores briefly" true for abandoned ones.
 	go srv.RunPurgeLoop(ctx)
 
-	if *tlsDir != "" {
-		id, err := tlsid.Load(*tlsDir)
-		if err != nil {
-			return fmt.Errorf("tls: %w", err)
-		}
-		log.Printf("sund %s listening on %s (https, db=%s)", version, *addr, *dbPath)
-		log.Printf("pinned address: sund://<host>%s#%s", portSuffix(*addr), id.Fingerprint)
-		return srv.RunTLS(ctx, *addr, id.ServerTLSConfig())
+	// Pinned TLS is the default (PRD, Server address: "pinned mode remains the
+	// self-host-first default"). tlsid.Load creates the CA and leaf on first run,
+	// so this needs no setup — which is what made the old HTTP default only a
+	// convenience. Plain HTTP stays available for WebPKI mode, where a
+	// TLS-terminating proxy holds a publicly trusted certificate, but it is now
+	// an explicit choice rather than what you get by not choosing.
+	if *plainHTTP {
+		log.Printf("sund %s listening on %s (plain http, db=%s)", version, *addr, *dbPath)
+		log.Printf("no transport security of its own: expect a TLS-terminating proxy in front (WebPKI mode)")
+		return srv.Run(ctx, *addr)
 	}
 
-	log.Printf("sund %s listening on %s (http, db=%s)", version, *addr, *dbPath)
-	return srv.Run(ctx, *addr)
+	id, err := tlsid.Load(*tlsDir)
+	if err != nil {
+		return fmt.Errorf("tls: %w", err)
+	}
+	log.Printf("sund %s listening on %s (https, pinned, db=%s)", version, *addr, *dbPath)
+	log.Printf("pinned address: sund://<host>%s#%s", portSuffix(*addr), id.Fingerprint)
+	return srv.RunTLS(ctx, *addr, id.ServerTLSConfig())
 }
 
 // portSuffix returns the ":port" part of a listen address for the address hint.
@@ -341,20 +351,30 @@ func runAdminAccountCreate(args []string) error {
 func runHealth(args []string) error {
 	fs := flag.NewFlagSet("health", flag.ExitOnError)
 	addr := fs.String("addr", envOr("SUND_ADDR", ":5870"), "server address to probe (env: SUND_ADDR)")
+	plainHTTP := fs.Bool("http", envOr("SUND_HTTP", "") != "",
+		"probe over plain HTTP instead of TLS (env: SUND_HTTP)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	return checkHealth(healthURL(*addr))
+	return checkHealth(healthURL(*addr, *plainHTTP))
 }
 
 // healthURL turns a listen address into a probe URL, filling in a loopback host
 // for the bare ":port" form the server listens on.
-func healthURL(addr string) string {
+// defaultTLSDir is where `serve` keeps the pinned CA and leaf when nothing else
+// is given. Relative, like the default database path, so the whole deployment is
+// one directory the operator can copy (the Holm bar).
+const defaultTLSDir = "tls"
+
+func healthURL(addr string, plainHTTP bool) string {
 	host := addr
 	if strings.HasPrefix(host, ":") {
 		host = "127.0.0.1" + host
 	}
-	return "http://" + host + "/health"
+	if plainHTTP {
+		return "http://" + host + "/health"
+	}
+	return "https://" + host + "/health"
 }
 
 func checkHealth(url string) error {
@@ -364,7 +384,14 @@ func checkHealth(url string) error {
 	if err != nil {
 		return err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	// The probe is a liveness check on the server's own address, usually loopback
+	// inside a container, so it does not verify the certificate: it is asking
+	// "are you up", not "are you who you claim". Pinning is the client's job and
+	// happens against the fingerprint in the server address, not here.
+	client := &http.Client{Transport: &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // liveness probe, not a trust decision
+	}}
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}

@@ -33,9 +33,13 @@ func TestHealthURL(t *testing.T) {
 		"example:8080":   "http://example:8080/health",
 	}
 	for addr, want := range cases {
-		if got := healthURL(addr); got != want {
-			t.Errorf("healthURL(%q) = %q, want %q", addr, got, want)
+		if got := healthURL(addr, true); got != want {
+			t.Errorf("healthURL(%q, http) = %q, want %q", addr, got, want)
 		}
+	}
+	// TLS is the default, so the probe follows it unless asked for HTTP.
+	if got := healthURL(":5870", false); got != "https://127.0.0.1:5870/health" {
+		t.Errorf("healthURL default = %q, want https", got)
 	}
 }
 

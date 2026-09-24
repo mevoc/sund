@@ -57,7 +57,10 @@ intent.
 - `docs/Sund-PRD.md` — **current (v0.11).** Two-plane architecture, pseudonymous
   queues, device list/revocation/key bundles, push architecture (UnifiedPush/ntfy
   on Android; vendor APNS gateway on iOS — pluggable provider interface),
-  fingerprint-pinned server address, one-binary stack requirement. New in 0.11:
+  fingerprint-pinned server address, one-binary stack requirement. **Pinned TLS
+  is the flagless default** since 2026-09-24 — `serve` generates its own CA on
+  first run; `--http` / `SUND_HTTP` opts out for WebPKI behind a proxy. New in
+  0.11:
   two sentences made true (decision 19) — the sender key is *bound by the first
   SEND*, not supplied at queue creation, and expired messages are now swept from
   abandoned queues hourly rather than only on drain, so "it stores briefly" holds

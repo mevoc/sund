@@ -69,6 +69,10 @@ def _start_server(binary: Path, db_path: Path, log_path: Path, tls_dir: Path | N
     if tls_dir is not None:
         cmd += ["--tls-dir", str(tls_dir)]
         scheme = "https"
+    else:
+        # Pinned TLS is the flagless default now, so the plain-HTTP suite has to
+        # ask for HTTP explicitly — the same choice a WebPKI deployment makes.
+        cmd += ["--http"]
     log_file = open(log_path, "wb")
     proc = subprocess.Popen(cmd, stdout=log_file, stderr=subprocess.STDOUT)
     server = SundServer(

@@ -54,13 +54,16 @@ intent.
 
 ## Docs
 
-- `docs/Sund-PRD.md` — **current (v0.11).** Two-plane architecture, pseudonymous
+- `docs/Sund-PRD.md` — **current (v0.12).** Two-plane architecture, pseudonymous
   queues, device list/revocation/key bundles, push architecture (UnifiedPush/ntfy
   on Android; vendor APNS gateway on iOS — pluggable provider interface),
   fingerprint-pinned server address, one-binary stack requirement. **Pinned TLS
   is the flagless default** since 2026-09-24 — `serve` generates its own CA on
   first run; `--http` / `SUND_HTTP` opts out for WebPKI behind a proxy. New in
-  0.11:
+  0.12: a peer's `push_endpoint` is withheld (decision 20) — it was the one
+  *capability* in the member-visible set rather than a disclosure, since a
+  wake-up URL on a bearer-URL distributor is the ability to wake or spam that
+  device. A device still reads back its own. In 0.11:
   two sentences made true (decision 19) — the sender key is *bound by the first
   SEND*, not supplied at queue creation, and expired messages are now swept from
   abandoned queues hourly rather than only on drain, so "it stores briefly" holds

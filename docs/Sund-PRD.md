@@ -2,7 +2,7 @@ Sund
 
 «A blind strait between your devices.»
 
-Status: PRD v0.11 (Draft) — supersedes PRD 0.10
+Status: PRD v0.12 (Draft) — supersedes PRD 0.11
 
 > Working name: **Sund** (Swedish: a strait between islands — the channel between
 > skerries; also "sound, healthy"). The kernel extracted from Skerry
@@ -152,11 +152,12 @@ Devices
   destroys nothing), so the fastest possible response to a mis-shared QR is worth
   more than the ability of a hostile member to be obstructive.
 - Explicit device list: every device in an account can see all registered devices
-  (id, public_key, role, push_endpoint, capabilities, created, last_seen and
-  whether it is revoked — but not quota_bytes, see Storage quota). What that
-  exposes between peers is listed under Threat model → residual metadata;
-  `push_endpoint` in particular is a capability, not just a fact. Revocation is a
-  first-class
+  (id, public_key, role, capabilities, created, last_seen and whether it is
+  revoked). Two per-device fields are deliberately *not* in it: `quota_bytes`,
+  which is read by the device it caps and nobody else (decision 16), and
+  `push_endpoint`, which is returned only to the device that set it
+  (decision 20). What the list does expose between peers is enumerated under
+  Threat model → residual metadata. Revocation is a first-class
   operation; a revoked device's identity key and queue access die immediately,
   and its undelivered messages are dropped along with its queues. Revocation is
   destructive and has no undo — part of why an account may want it gated.
@@ -787,15 +788,13 @@ Observable by an **account member**, from the device list every member reads.
 These are the items the anti-stalkerware argument turns on, because the observer
 is someone the subject lives with:
 
-- **Every peer's `push_endpoint`** — its UnifiedPush/ntfy URL, verbatim. This is
-  the sharpest item in this section and it is not a disclosure at all.
-  *Enables:* on a default ntfy deployment a topic URL is effectively a bearer
-  capability to wake or spam that device, outside Sund entirely and beyond the
-  reach of revocation, quota or anything else here. A consumer that cannot accept
-  every member holding that over every other must not use a bearer-URL
-  distributor, or must not put the endpoint in a shared account's device list.
-  Sund publishes it because a client needs a peer's endpoint for nothing — which
-  means this is a field the list could lose; see the open decisions.
+- **Not** a peer's `push_endpoint`, since 0.12. It used to be here and it was
+  the sharpest item in the section: on a bearer-URL distributor such as a default
+  ntfy topic, a peer's wake-up URL is the ability to wake or spam that device,
+  outside Sund entirely and beyond the reach of revocation or quota. It was the
+  only *capability* a member held over a peer, and no client needed it — pings
+  are the server's to send — so decision 20 withholds it. A device still reads
+  back its own.
 - **`last_seen` for every peer** — when each device last made an authenticated
   *management-plane* request. The transport plane does not touch it: draining,
   acking and sending leave it unchanged. But because clients MUST refetch the
@@ -1348,6 +1347,21 @@ stack lock and the second transport-trust mode. Item 12 came in 0.4, item 13 in
     because it is a privacy promise and retracting one should be the last resort:
     an hourly background sweep now deletes expired rows everywhere. A goroutine,
     not a service — no new process, nothing to configure, the Holm bar intact.
+20. A peer's wake-up endpoint is withheld. `push_endpoint` was in the device
+    list from the first schema and came out in 0.12: it is returned to the device
+    that set it and omitted for everyone else. It was the one *capability* in the
+    member-visible set rather than a disclosure — on a bearer-URL distributor,
+    which a default ntfy topic is, holding a peer's endpoint is the ability to
+    wake or spam that device, outside Sund entirely and beyond the reach of
+    revocation, quota or anything else here. Nothing needed it: pings are the
+    server's to send, and pairing carries what a peer needs out of band, so
+    publishing it bought no accountability and sold a capability — the same test
+    decision 16 applied to a storage ceiling, reaching the same answer for a
+    field that had been there far longer. Self-read stays, because reading back
+    what you registered is a diagnostic and confers nothing over anyone. This
+    closes what 0.8 raised as an open decision rather than folding it in quietly,
+    since it is a wire-format change: a client that displayed a peer's endpoint
+    will now see it empty.
 
 Open decisions remaining
 
@@ -1368,20 +1382,11 @@ Open decisions remaining
    consumer has yet asked for administration that survives a hostile host.
    Deferred, not rejected: 0.4's model is a mistake-and-member defence and says
    so.
-3. Whether `push_endpoint` belongs in the device-list response. Surfaced by
-   writing the residual-metadata list against the code in 0.8: every member reads
-   every peer's wake-up URL, and on a default ntfy deployment that URL is a
-   bearer capability to wake or spam that device — outside Sund, and beyond the
-   reach of revocation or quota. It is the only *capability* in the member-visible
-   set, and no client obviously needs a peer's endpoint: pings are the server's
-   to send, and pairing carries what a peer needs out of band. Two ways to close
-   it, both cheap: drop the field from the response, or keep it and say in the
-   Pinning-Contract-style normative voice that a consumer using bearer-URL
-   distributors must not share an account across parties that must not wake each
-   other. Open because it is a wire-format change and this revision is
-   documentation; raised here rather than folded in quietly.
 
 Resolved since first listed as open (no longer decisions):
+
+- Whether `push_endpoint` belongs in the device-list response — closed in 0.12
+  by decision 20: it does not, except for the device that set it.
 
 - Blob/object storage — a Non-goal, not an open question: add it only when a
   consumer demonstrates need, as a separate optional module keeping the same

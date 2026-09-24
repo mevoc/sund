@@ -23,6 +23,7 @@ def test_register_and_list_self(sund_server, new_account):
     assert len(devices) == 1
     assert devices[0]["id"] == client.device_id
     assert devices[0]["public_key"] == client.public_key_b64
+    # A device reads back its own endpoint; a peer's is withheld (see below).
     assert devices[0]["push_endpoint"] == "https://ntfy/x"
 
 
@@ -75,3 +76,36 @@ def test_cross_account_isolation(sund_server, new_account):
     devices = client_a.list_devices()
     assert len(devices) == 1
     assert devices[0]["id"] == client_a.device_id
+
+
+def test_push_endpoint_is_self_only(sund_server, new_account):
+    """A peer's wake-up URL is a capability, not a fact about it.
+
+    On a bearer-URL distributor — a default ntfy topic is one — holding a peer's
+    endpoint is the ability to wake or spam that device, outside Sund entirely
+    and beyond the reach of revocation or quota. No client needs a peer's
+    endpoint, since pings are the server's to send, so it is returned only to the
+    device that set it (PRD, decision 20).
+    """
+    _, token = new_account()
+    a = beaconsim.register_device(
+        sund_server.base_url, token, push_endpoint="https://ntfy.example/a"
+    )
+    b = beaconsim.register_device(
+        sund_server.base_url,
+        a.create_invitation().token,
+        push_endpoint="https://ntfy.example/b",
+    )
+
+    by_id = {d["id"]: d for d in a.list_devices()}
+    assert by_id[a.device_id].get("push_endpoint") == "https://ntfy.example/a", (
+        "a device must still be able to read back its own endpoint"
+    )
+    assert not by_id[b.device_id].get("push_endpoint"), (
+        "a peer's wake-up URL must not be readable"
+    )
+
+    # And symmetrically from B's side.
+    by_id = {d["id"]: d for d in b.list_devices()}
+    assert by_id[b.device_id].get("push_endpoint") == "https://ntfy.example/b"
+    assert not by_id[a.device_id].get("push_endpoint")

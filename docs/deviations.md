@@ -1,7 +1,7 @@
 # Sund — deviations from the PRD and implementation guide
 
-Where the code, the guide or an issue departs from `Sund-PRD.md` (v0.8) or
-`Sund-ImplementationGuide.md` (v0.6), it is recorded here at the time the departure
+Where the code, the guide or an issue departs from `Sund-PRD.md` (v0.9) or
+`Sund-ImplementationGuide.md` (v0.7), it is recorded here at the time the departure
 is made. Open entries are the agenda for the next spec revision; a revision closes
 them by updating `Status`. Format and rules: `~/projects/CLAUDE.md`, *Design flow*.
 

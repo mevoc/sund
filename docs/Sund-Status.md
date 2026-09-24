@@ -28,8 +28,8 @@ At a glance
   61 system tests, both
   per-commit. Includes the blindness audit (S8) and operator-survival (S9).
 - Not yet built: iOS push provider, metrics. TLS/fingerprint pinning is
-  implemented as an opt-in mode (`serve --tls-dir`); making it the default is a
-  follow-up. See "Not built yet".
+  the flagless default: `serve` generates a pinned CA and leaf on first run.
+  See "Not built yet".
 
 ---
 
@@ -109,9 +109,9 @@ HTTP API (implemented endpoints)
 
 Request/response shapes are JSON; payloads are base64 ciphertext. See
 `Sund-ImplementationGuide.md` for the sketch and `tests/beaconsim/` for a working
-client. The binary serves plain HTTP by default; `serve --tls-dir DIR` switches
-it to HTTPS with fingerprint pinning (see Transport security). A reverse proxy
-for WebPKI TLS also remains supported.
+client. The binary serves pinned HTTPS by default, generating its CA on first
+run (see Transport security); `serve --http` (env `SUND_HTTP`) serves plain HTTP
+instead, for WebPKI mode behind a TLS-terminating proxy.
 
 ---
 
@@ -230,9 +230,10 @@ Behavior details a consumer should know
   note). A revoked or cross-account target 404s; a device's bundle is cleared on
   revocation. Bundles are public key material, not secrets, and are distinct from
   blob/object storage (a Non-goal).
-- Transport security: `serve --tls-dir DIR` serves HTTPS with a two-layer cert —
-  a long-lived offline CA (auto-generated in DIR) whose SPKI SHA-256 is the pin,
-  signing a rotatable leaf. `sund cert fingerprint --tls-dir DIR [--host host:port]`
+- Transport security: **on by default**. `serve` serves HTTPS with a two-layer
+  cert, creating the CA and leaf in `--tls-dir` (default `tls/`, env
+  `SUND_TLS_DIR`) on first run, so pinned mode needs no setup: a long-lived
+  offline CA whose SPKI SHA-256 is the pin, signing a rotatable leaf. `sund cert fingerprint --tls-dir DIR [--host host:port]`
   prints the pin or a full `sund://host:port#fingerprint` address for the QR. The
   client pins the CA fingerprint from the address, disables WebPKI/hostname
   checks, and rejects any cert that doesn't match — first-connect MITM is
@@ -376,12 +377,9 @@ Run both with `make test-all`.
 
 Not built yet (relative to the PRD / API sketch)
 
-- Pinned TLS is opt-in, not the default: plain HTTP remains the flagless default
-  and the container/compose still serve HTTP. Making pinned TLS the self-host
-  default (and enabling it in the image) is a follow-up. Client pinning is proven
-  in beaconsim (Python); the real clients (Android/iOS/web) must each implement
-  the same contract (now specified normatively in `Sund-Pinning-Contract.md`)
-  with platform-specific trust evaluation.
+- Client pinning is proven in beaconsim (Python); the real clients
+  (Android/iOS/web) must each implement the same contract (specified normatively
+  in `Sund-Pinning-Contract.md`) with platform-specific trust evaluation.
 - iOS push: the provider interface exists; only UnifiedPush/ntfy is implemented.
 - Metrics endpoint.
 - Storage quota is enforced sequentially-correct; under heavy concurrent sends to

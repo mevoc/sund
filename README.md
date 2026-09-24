@@ -18,7 +18,8 @@ interprets them. (Working name.)
 Both planes work, with push wake-up, device revocation, key bundles, storage
 quota at all three levels (account, device, queue) and the optional account
 administration model wired in, and the blindness (S8) and operator-survival (S9)
-audits pass. A flat account — the default — behaves as it always has: every
+audits pass. Pinned TLS is the default: `sund serve` generates its own CA on
+first run, and `--http` opts out for WebPKI mode behind a proxy. A flat account — the default — behaves as it always has: every
 device may revoke any other. Three design decisions are still open: iOS APNS
 gateway operations, whether administrative acts should be signed by the acting
 device so peers can verify them without trusting the server, and whether

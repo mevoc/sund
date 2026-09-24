@@ -22,9 +22,16 @@ services:
     volumes:
       - sund-data:/data
     # The image already defaults these; shown here so the deployment is legible.
+    # Pinned TLS is the default and the CA lives on the volume, so the address
+    # clients pinned keeps working across container replacements. Get the
+    # fingerprint with:
+    #   docker compose exec sund /sund cert fingerprint --tls-dir /data/tls
+    # For WebPKI mode instead — a proxy terminating TLS in front — set
+    # SUND_HTTP: "1" and drop the published port to the proxy's network.
     environment:
       SUND_ADDR: ":5870"
       SUND_DB: "/data/sund.db"
+      SUND_TLS_DIR: "/data/tls"
     # distroless has no shell or curl, so the binary probes itself.
     healthcheck:
       test: ["CMD", "/sund", "health"]

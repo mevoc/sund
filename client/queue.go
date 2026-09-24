@@ -123,3 +123,16 @@ func (s *Sender) Send(ctx context.Context, ciphertext []byte, opts SendOptions) 
 	}
 	return out.MessageID, nil
 }
+
+// SetQuota sets this queue's storage ceiling in bytes; 0 removes it. It is the
+// only quota level a client may write, and the reason is the asymmetry the PRD
+// draws (decision 17): capping your own inbound channel limits only what you
+// receive, so it is nobody's weapon. The account and device ceilings cap someone
+// else and are the operator's alone.
+//
+// Because a bound queue has exactly one sender, a per-queue ceiling bounds a
+// peer — which is how Sund limits a sender without ever recording who it is.
+func (r *Recipient) SetQuota(ctx context.Context, quotaBytes int64) error {
+	return r.conn.do(ctx, r.key, http.MethodPost, "/v1/quota/"+r.RecipientID,
+		nil, map[string]int64{"quota_bytes": quotaBytes}, nil)
+}

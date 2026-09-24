@@ -62,6 +62,12 @@ type Device struct {
 	Created      time.Time
 	LastSeen     time.Time
 	Revoked      bool
+	// QuotaBytes caps the stored payloads in the queues this device owns; 0 means
+	// no ceiling at this level. Deliberately absent from the device-list response
+	// a peer reads (PRD 0.10, decision 16): a ceiling constrains its own device
+	// and confers nothing over anyone, so publishing it would only tell a peer
+	// what it costs to silence this one.
+	QuotaBytes int64
 }
 
 // Open opens (creating if absent) the database at path, applies the schema, and
@@ -136,7 +142,8 @@ CREATE TABLE IF NOT EXISTS devices (
   capabilities  TEXT NOT NULL DEFAULT '',
   created       TEXT NOT NULL,
   last_seen     TEXT NOT NULL,
-  revoked       INTEGER NOT NULL DEFAULT 0
+  revoked       INTEGER NOT NULL DEFAULT 0,
+  quota_bytes   INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_devices_account ON devices(account_id);
 
@@ -153,7 +160,8 @@ CREATE TABLE IF NOT EXISTS queues (
   recipient_key BLOB NOT NULL,
   sender_key    BLOB,
   created       TEXT NOT NULL,
-  retired       INTEGER NOT NULL DEFAULT 0
+  retired       INTEGER NOT NULL DEFAULT 0,
+  quota_bytes   INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_queues_sender ON queues(sender_id);
 CREATE INDEX IF NOT EXISTS idx_queues_owner ON queues(owner_device);
@@ -199,6 +207,14 @@ func migrate(db *sql.DB) error {
 	}
 	// Index on invitations.id must come after the column is guaranteed to exist.
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_invitations_id ON invitations(id)`); err != nil {
+		return err
+	}
+	// The device and queue quota levels (PRD 0.9, decisions 13 and 17). 0 means no
+	// ceiling at that level, so an existing database keeps its behaviour exactly.
+	if err := ensureColumn(db, "devices", "quota_bytes", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := ensureColumn(db, "queues", "quota_bytes", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
 	// messages.status never held anything but 'stored' — an ack deletes the row
@@ -506,7 +522,7 @@ func (s *Store) RevokeDevice(ctx context.Context, id string) error {
 	return tx.Commit()
 }
 
-const deviceColumns = `SELECT id, account_id, public_key, push_endpoint, capabilities, created, last_seen, revoked FROM devices`
+const deviceColumns = `SELECT id, account_id, public_key, push_endpoint, capabilities, created, last_seen, revoked, quota_bytes FROM devices`
 
 type rowScanner interface {
 	Scan(dest ...any) error
@@ -519,7 +535,7 @@ func scanDevice(sc rowScanner) (*Device, error) {
 		created, lastSeen string
 		revoked           int
 	)
-	if err := sc.Scan(&d.ID, &d.AccountID, &pub, &d.PushEndpoint, &d.Capabilities, &created, &lastSeen, &revoked); err != nil {
+	if err := sc.Scan(&d.ID, &d.AccountID, &pub, &d.PushEndpoint, &d.Capabilities, &created, &lastSeen, &revoked, &d.QuotaBytes); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrDeviceNotFound
 		}
@@ -530,4 +546,67 @@ func scanDevice(sc rowScanner) (*Device, error) {
 	d.LastSeen, _ = time.Parse(time.RFC3339, lastSeen)
 	d.Revoked = revoked != 0
 	return &d, nil
+}
+
+// ErrQuotaNotChanged is returned when a quota write names no live row.
+var ErrQuotaNotChanged = errors.New("no such device or queue")
+
+// SetDeviceQuota sets a device's storage ceiling, in bytes; 0 removes it. This
+// is the operator's write (PRD 0.10, decision 13): capping a device silences
+// someone else, so it deliberately has no API endpoint.
+func (s *Store) SetDeviceQuota(ctx context.Context, deviceID string, bytes int64) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE devices SET quota_bytes=? WHERE id=? AND revoked=0`, bytes, deviceID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrQuotaNotChanged
+	}
+	return nil
+}
+
+// DeviceStoredBytes is the live payload total across the queues a device owns:
+// accepted, unacked and unexpired. Expired-but-unpurged rows do not count, the
+// same rule the enforcement check applies (PRD, Devices → Storage quota).
+func (s *Store) DeviceStoredBytes(ctx context.Context, deviceID string) (int64, error) {
+	var used int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COALESCE(SUM(LENGTH(m.payload)), 0)
+		   FROM messages m
+		   JOIN queues q ON m.queue_id = q.recipient_id
+		  WHERE q.owner_device = ? AND m.expires > ?`,
+		deviceID, nowStr(),
+	).Scan(&used)
+	return used, err
+}
+
+// SetQueueQuota sets a queue's storage ceiling, in bytes; 0 removes it. Unlike
+// the other two levels this is the owner's own write, authenticated by the
+// queue's recipient key: capping your own inbound channel limits only what you
+// receive, so it is nobody's weapon (PRD 0.10, decision 17).
+func (s *Store) SetQueueQuota(ctx context.Context, recipientID string, bytes int64) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE queues SET quota_bytes=? WHERE recipient_id=? AND retired=0`, bytes, recipientID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrQuotaNotChanged
+	}
+	return nil
+}
+
+// AccountQuotaBytes returns an account's storage ceiling; 0 means none. It is
+// the one account-level figure a device may learn about itself (PRD, decision
+// 16): a static constant that binds every device equally and describes none of
+// them. Account *usage* is deliberately not exposed — a number every member
+// could read would be a coarse activity signal about all of its peers.
+func (s *Store) AccountQuotaBytes(ctx context.Context, accountID string) (int64, error) {
+	var q int64
+	err := s.db.QueryRowContext(ctx, `SELECT quota_bytes FROM accounts WHERE id=?`, accountID).Scan(&q)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, ErrDeviceNotFound
+	}
+	return q, err
 }

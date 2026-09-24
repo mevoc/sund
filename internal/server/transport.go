@@ -137,7 +137,10 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 
 	msg, err := s.store.AppendMessage(r.Context(), q.RecipientID, payload, clampMessageTTL(req.TTL))
 	if errors.Is(err, store.ErrQuotaExceeded) {
-		writeError(w, http.StatusInsufficientStorage, "account storage quota exceeded")
+		// Deliberately unspecific: a sender that could tell which of the three
+		// ceilings tripped would learn about state beyond its own queue
+		// (PRD, Threat model — what a refused send discloses).
+		writeError(w, http.StatusInsufficientStorage, "storage quota exceeded")
 		return
 	}
 	if err != nil {
@@ -285,4 +288,42 @@ func clampMessageTTL(seconds int) time.Duration {
 		return maxMessageTTL
 	}
 	return d
+}
+
+type setQueueQuotaRequest struct {
+	QuotaBytes int64 `json:"quota_bytes"`
+}
+
+// handleSetQueueQuota sets the calling queue's storage ceiling. It is the only
+// quota level a client may write, and it sits on the transport plane rather than
+// the management plane: the caller proves it owns the queue with the recipient
+// key, so the server never learns which device adjusted it. Capping your own
+// inbound channel limits only what you receive, which is why this needs none of
+// the operator-only machinery the device ceiling has (PRD, decision 17).
+func (s *Server) handleSetQueueQuota(w http.ResponseWriter, r *http.Request) {
+	q, body, ok := s.authorizeRecipient(w, r)
+	if !ok {
+		return
+	}
+	var req setQueueQuotaRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	if req.QuotaBytes < 0 {
+		writeError(w, http.StatusBadRequest, "quota_bytes must not be negative")
+		return
+	}
+	if err := s.store.SetQueueQuota(r.Context(), q.RecipientID, req.QuotaBytes); err != nil {
+		if errors.Is(err, store.ErrQuotaNotChanged) {
+			writeError(w, http.StatusNotFound, "no such queue")
+			return
+		}
+		log.Printf("set queue quota: %v", err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	// No remaining headroom in the response, here or anywhere: it would hand the
+	// sender the drain-timing signal the refused-send oracle makes it probe for.
+	writeJSON(w, http.StatusOK, map[string]int64{"quota_bytes": req.QuotaBytes})
 }

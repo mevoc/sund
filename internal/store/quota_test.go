@@ -140,3 +140,123 @@ func TestQuotaZeroMeansUnlimited(t *testing.T) {
 		}
 	}
 }
+
+// The three ceilings are independent and each refuses on its own, with the
+// boundary inclusive: landing exactly on a ceiling succeeds (PRD 0.10,
+// decisions 13 and 17).
+func TestThreeQuotaLevelsEnforcedIndependently(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("queue ceiling refuses while device and account have room", func(t *testing.T) {
+		st := newStore(t)
+		dev := seedDevice(t, st)
+		q1, err := st.CreateQueue(ctx, dev.ID, randKey(t))
+		if err != nil {
+			t.Fatalf("CreateQueue: %v", err)
+		}
+		q2, err := st.CreateQueue(ctx, dev.ID, randKey(t))
+		if err != nil {
+			t.Fatalf("CreateQueue: %v", err)
+		}
+		if err := st.SetQueueQuota(ctx, q1.RecipientID, 10); err != nil {
+			t.Fatalf("SetQueueQuota: %v", err)
+		}
+
+		// Exactly on the ceiling succeeds.
+		if _, err := st.AppendMessage(ctx, q1.RecipientID, make([]byte, 10), time.Minute); err != nil {
+			t.Fatalf("append at the boundary: %v", err)
+		}
+		// One more byte does not.
+		if _, err := st.AppendMessage(ctx, q1.RecipientID, []byte("x"), time.Minute); !errors.Is(err, ErrQuotaExceeded) {
+			t.Fatalf("append past the queue ceiling: got %v, want ErrQuotaExceeded", err)
+		}
+		// The bulkhead: the owner's other queue is unaffected.
+		if _, err := st.AppendMessage(ctx, q2.RecipientID, make([]byte, 1000), time.Minute); err != nil {
+			t.Fatalf("sibling queue must still receive: %v", err)
+		}
+	})
+
+	t.Run("device ceiling spans the queues it owns", func(t *testing.T) {
+		st := newStore(t)
+		dev := seedDevice(t, st)
+		q1, _ := st.CreateQueue(ctx, dev.ID, randKey(t))
+		q2, _ := st.CreateQueue(ctx, dev.ID, randKey(t))
+		if err := st.SetDeviceQuota(ctx, dev.ID, 100); err != nil {
+			t.Fatalf("SetDeviceQuota: %v", err)
+		}
+		if _, err := st.AppendMessage(ctx, q1.RecipientID, make([]byte, 60), time.Minute); err != nil {
+			t.Fatalf("first append: %v", err)
+		}
+		// The second queue draws on the same device budget.
+		if _, err := st.AppendMessage(ctx, q2.RecipientID, make([]byte, 60), time.Minute); !errors.Is(err, ErrQuotaExceeded) {
+			t.Fatalf("append past the device ceiling: got %v, want ErrQuotaExceeded", err)
+		}
+	})
+
+	t.Run("zero at a level means no ceiling there", func(t *testing.T) {
+		st := newStore(t)
+		dev := seedDevice(t, st)
+		q, _ := st.CreateQueue(ctx, dev.ID, randKey(t))
+		if err := st.SetQueueQuota(ctx, q.RecipientID, 10); err != nil {
+			t.Fatalf("SetQueueQuota: %v", err)
+		}
+		if _, err := st.AppendMessage(ctx, q.RecipientID, make([]byte, 20), time.Minute); !errors.Is(err, ErrQuotaExceeded) {
+			t.Fatalf("want refusal while capped, got %v", err)
+		}
+		if err := st.SetQueueQuota(ctx, q.RecipientID, 0); err != nil {
+			t.Fatalf("clear quota: %v", err)
+		}
+		if _, err := st.AppendMessage(ctx, q.RecipientID, make([]byte, 20), time.Minute); err != nil {
+			t.Fatalf("after clearing the ceiling: %v", err)
+		}
+	})
+}
+
+// Lowering a ceiling below current usage refuses further sends and deletes
+// nothing — ceilings are not retroactive (PRD 0.10, Devices → Storage quota).
+func TestLoweringAQuotaDiscardsNothing(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	dev := seedDevice(t, st)
+	q, _ := st.CreateQueue(ctx, dev.ID, randKey(t))
+
+	if _, err := st.AppendMessage(ctx, q.RecipientID, make([]byte, 500), time.Minute); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	if err := st.SetQueueQuota(ctx, q.RecipientID, 10); err != nil {
+		t.Fatalf("SetQueueQuota: %v", err)
+	}
+	if _, err := st.AppendMessage(ctx, q.RecipientID, []byte("x"), time.Minute); !errors.Is(err, ErrQuotaExceeded) {
+		t.Fatalf("further sends must be refused, got %v", err)
+	}
+	msgs, err := st.DrainMessages(ctx, q.RecipientID)
+	if err != nil {
+		t.Fatalf("drain: %v", err)
+	}
+	if len(msgs) != 1 || len(msgs[0].Payload) != 500 {
+		t.Fatalf("the stored message must survive the lowered ceiling, got %d messages", len(msgs))
+	}
+}
+
+// DeviceStoredBytes is what GET /v1/me/quota reports, so it must exclude
+// expired rows exactly as the enforcement check does.
+func TestDeviceStoredBytesExcludesExpired(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	dev := seedDevice(t, st)
+	q, _ := st.CreateQueue(ctx, dev.ID, randKey(t))
+
+	if _, err := st.AppendMessage(ctx, q.RecipientID, make([]byte, 40), time.Minute); err != nil {
+		t.Fatalf("live append: %v", err)
+	}
+	if _, err := st.AppendMessage(ctx, q.RecipientID, make([]byte, 40), -time.Minute); err != nil {
+		t.Fatalf("expired append: %v", err)
+	}
+	used, err := st.DeviceStoredBytes(ctx, dev.ID)
+	if err != nil {
+		t.Fatalf("DeviceStoredBytes: %v", err)
+	}
+	if used != 40 {
+		t.Fatalf("stored bytes = %d, want 40 (expired rows excluded)", used)
+	}
+}

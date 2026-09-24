@@ -76,6 +76,7 @@ func New(cfg Config, st *store.Store) *Server {
 	mux.Handle("GET /v1/invitations", s.requireSignature(http.HandlerFunc(s.handleListInvitations)))
 	mux.Handle("POST /v1/invitations/{id}/revoke", s.requireSignature(http.HandlerFunc(s.handleRevokeInvitation)))
 	mux.Handle("PUT /v1/me/push", s.requireSignature(http.HandlerFunc(s.handleUpdatePush)))
+	mux.Handle("GET /v1/me/quota", s.requireSignature(http.HandlerFunc(s.handleGetQuota)))
 	// Queue creation is the plane meeting point: signed by device identity so
 	// the server records ownership (quota + wake-up).
 	mux.Handle("POST /v1/queues", s.requireSignature(http.HandlerFunc(s.handleCreateQueue)))
@@ -84,6 +85,9 @@ func New(cfg Config, st *store.Store) *Server {
 	mux.HandleFunc("GET /v1/recv/{recipient_id}", s.handleRecv)
 	mux.HandleFunc("POST /v1/ack/{recipient_id}", s.handleAck)
 	mux.HandleFunc("POST /v1/retire/{recipient_id}", s.handleRetire)
+	// The one quota level a client may write: its own queue's. Authenticated by
+	// the queue's recipient key, so no device identity enters (PRD, decision 17).
+	mux.HandleFunc("POST /v1/quota/{recipient_id}", s.handleSetQueueQuota)
 	s.handler = mux
 	return s
 }

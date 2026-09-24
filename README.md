@@ -15,15 +15,15 @@ interprets them. (Working name.)
 
 ## Status
 
-Both planes work, with push wake-up, device revocation, key bundles and
-per-account storage quota wired in, and the blindness (S8) and operator-survival
-(S9) audits pass. Two design decisions are still open: iOS APNS gateway
-operations, and whether administrative acts should be signed by the acting device
-so peers can verify them without trusting the server. PRD 0.4's optional account
-administration model (flat/managed accounts, device roles) and PRD 0.5's
-per-device storage ceiling are specified but **not yet implemented** — today
-every device in an account may revoke any other (what the spec calls a flat
-account), and the only storage ceiling is account-wide. Implemented endpoints:
+Both planes work, with push wake-up, device revocation, key bundles, storage
+quota at all three levels (account, device, queue) and the optional account
+administration model wired in, and the blindness (S8) and operator-survival (S9)
+audits pass. A flat account — the default — behaves as it always has: every
+device may revoke any other. Three design decisions are still open: iOS APNS
+gateway operations, whether administrative acts should be signed by the acting
+device so peers can verify them without trusting the server, and whether
+`push_endpoint` belongs in the device-list response at all. Implemented
+endpoints:
 
 | Method & path               | Auth                | Purpose                              |
 | --------------------------- | ------------------- | ------------------------------------ |
@@ -31,6 +31,8 @@ account), and the only storage ceiling is account-wide. Implemented endpoints:
 | `POST /v1/devices/register` | one-time token      | enroll a device (bootstrap)          |
 | `GET /v1/devices`           | device signature    | list the account's devices           |
 | `POST /v1/devices/{id}/revoke` | device signature | revoke a device (kills it + its queues) |
+| `POST /v1/devices/{id}/role` | device signature  | promote/demote a device (admin only) |
+| `GET /v1/me/quota`          | device signature    | own storage ceiling and usage        |
 | `POST /v1/invitations`      | device signature    | mint a token to pair another device  |
 | `GET /v1/invitations`       | device signature    | list outstanding invitations         |
 | `POST /v1/invitations/{id}/revoke` | device signature | revoke an invitation before use   |
@@ -42,14 +44,14 @@ account), and the only storage ceiling is account-wide. Implemented endpoints:
 | `GET /v1/recv/{recipient_id}` | per-queue recipient key | drain your queue                  |
 | `POST /v1/ack/{recipient_id}` | per-queue recipient key | delete acknowledged messages      |
 | `POST /v1/retire/{recipient_id}` | per-queue recipient key | retire a queue (rotation)      |
+| `POST /v1/quota/{recipient_id}` | per-queue recipient key | set this queue's storage ceiling |
 
 **Revocation** is one atomic step: the target's identity key dies, its push
 endpoint is cleared, and every queue it owns is retired with its messages
 dropped. The account's other devices are pinged to refetch the list and rotate
-their own queues. Any device in an account may revoke another — as built there
-is no role model. PRD 0.4 specifies an optional per-account administration mode
-that gates this behind an `admin` role; it is not implemented, and it is opt-in
-per account when it is.
+their own queues, and so is the revoked device itself. In a **flat** account
+(the default) any device may revoke any other; in a **managed** account that is
+admin-only, while a device may always revoke *itself* whatever its role.
 
 **Storage quota** is per account, attributed to the queue owner's side (so
 senders stay pseudonymous). A send that would push an account's stored payloads

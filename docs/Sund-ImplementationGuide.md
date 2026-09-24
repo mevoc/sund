@@ -24,8 +24,10 @@ Status: v0.8 (Draft) — companion to Sund-PRD.md
 > New in 0.4: the per-device storage quota of PRD 0.5 (decision 13) — the
 > operator surface, the enforcement rule and the test coverage. Writing a ceiling
 > stays out of the API; reading one does not, so the sketch gains
-> `GET /v1/me/quota` and `quota_bytes` in the device list, and a ceiling change
-> pings the account like any other administrative act.
+> `GET /v1/me/quota`, and a ceiling change pings the account like any other
+> administrative act. (Both halves were narrowed later: decision 16 keeps
+> `quota_bytes` out of the device list, and the ping goes only to the capped
+> device — see the 0.6 note above.)
 
 > New in 0.3: the account administration model of PRD 0.4 — administration modes,
 > the `admin`/`member` role, the role-granting invitation and the last-admin
@@ -197,8 +199,10 @@ rather than by a device, so it has no actor to exclude and pings *every* device
 is no longer in the device list, the refetch rule includes `GET /v1/me/quota`:
 refetch the device list, the invitation list and the quota read on **any** ping,
 or a ceiling change is undetectable. A
-revocation pings its *target* as well, which means the ping goes out before the
-target's push endpoint is cleared, in the same step — best-effort, so an
+revocation pings its *target* as well, which means the target's endpoint is
+captured before revocation clears it and the ping is dispatched once the
+revocation commits — so a failed revocation never tells a device it was removed.
+Best-effort, so an
 unreachable device learns from its next request instead. And since a ping carries
 nothing, a woken client cannot tell which act fired it: refetch the device list
 *and* the invitation list on any ping.
@@ -519,7 +523,8 @@ S5b Managed account, authorization — a member device M1 tries to revoke a peer
    mint an invitation and promote itself: all three refused, no device-list
    change, no ping. M1 can still revoke an outstanding invitation (fail-safe by
    design) and can revoke *itself*. An admin then revokes the second member M2:
-   succeeds, and M2 is pinged before its push endpoint is cleared.
+   succeeds, and M2 is pinged — its endpoint captured before revocation clears
+   it, the ping dispatched after the revocation commits.
 S5b2 Managed account, the last admin — the sole admin tries to demote itself and
    to be revoked by a member: both refused (409). It then revokes *itself*:
    succeeds, stranding the remaining members. `sund admin device promote`

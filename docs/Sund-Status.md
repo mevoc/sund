@@ -1,9 +1,9 @@
 Sund — Implementation Status
 
 Status: v0.1 (snapshot of the code at the storage-quota commit, 2026-07-20;
-"Not built yet", the schema block and multi-tenancy refreshed against PRD 0.10
-on 2026-09-24, when the three quota levels were built) — describes the code, not
-the plan
+"Not built yet", the schema block, multi-tenancy and administration refreshed
+against PRD 0.11 on 2026-09-24, when the three quota levels and the account
+administration model were built) — describes the code, not the plan
 
 This is a snapshot of what the Sund binary actually does as of the three-level
 quota commit, written for the people who build on it — chiefly family-beacon
@@ -24,7 +24,8 @@ At a glance
   (account, device, queue — decisions 13, 16, 17), and the account
   administration model (flat/managed accounts and device roles, decision 12).
 - Tests: a Go unit suite and a Python system suite (`beaconsim`) that drives the
-  real compiled binary with real crypto. ~96 Go cases, 60 system tests, both
+  real compiled binary with real crypto. 80 Go tests (99 with subtests) and
+  61 system tests, both
   per-commit. Includes the blindness audit (S8) and operator-survival (S9).
 - Not yet built: iOS push provider, metrics. TLS/fingerprint pinning is
   implemented as an opt-in mode (`serve --tls-dir`); making it the default is a
@@ -148,7 +149,11 @@ Behavior details a consumer should know
   indefinitely (PRD 0.11, decision 19).
 - Push wake-up: a ping carries nothing (no payload, no queue id) — only "check
   in". Pings fire on message arrival (queue → owner) and on device-list changes
-  (registration and revocation → the account's other devices), asynchronously so
+  (registration, revocation, role change and invitation minting → the account's
+  other devices, excluding the one that performed the act; a revocation
+  additionally pings its target, and `sund admin device promote` pings every
+  device, having no actor to exclude; a storage-ceiling change pings only the
+  capped device), asynchronously so
   a slow distributor never blocks the API. A per-message `priority` flag is an
   opaque hint the server forwards to the pinger without reading the payload
   (used for SOS). Provider is pluggable (`internal/push`); UnifiedPush/ntfy is
@@ -284,9 +289,11 @@ privacy documentation has to describe today.
 
 Consuming apps must state this honestly.
 
-Trust boundary: every non-revoked device in an account is trusted equally — as
-built, that includes the administrative acts (revoking a device, minting an
-invitation), which PRD 0.4 gates behind a role but the binary does not. The
+Trust boundary: in a **flat** account every non-revoked device is trusted
+equally, administrative acts included — any device may revoke any other and mint
+invitations. In a **managed** account those two acts and role changes are
+admin-only, while listing, revoking an outstanding invitation and self-revocation
+stay open to every device. The
 device list is visible to all members, and the server enforces no "which member
 may reach which" policy (nor will it — that one is the consumer's by design).
 If a consumer publishes reachable key bundles, any member device can initiate to
@@ -329,6 +336,16 @@ contract:
 7. Receiving: sign with the recipient key; decrypt locally; ack by message id.
 8. Rotation: periodically retire a queue and create a replacement.
 9. Device list: `GET /v1/devices`; refetch on wake and before any new pairing.
+10. Administration, the half Sund cannot verify: **render each device's `role`**
+    and **surface an administrative change** to the user rather than absorbing
+    the ping. A client that does neither is still contract-conformant and
+    administers covertly — which is exactly what makes a managed account
+    acceptable or not, so it is the consumer's obligation and stated here
+    because this list is where a client implementer works (PRD, decision 12).
+11. Refetch on any ping: the device list, the invitation list **and**
+    `GET /v1/me/quota`. A ping carries nothing, so a woken client cannot tell
+    which act fired it, and a storage-ceiling change is visible only through the
+    quota read.
 
 Payload encryption is entirely the client's concern. beaconsim uses X25519
 SealedBox as a stand-in; family-beacon's real session crypto (double-ratchet or
@@ -359,19 +376,6 @@ Run both with `make test-all`.
 
 Not built yet (relative to the PRD / API sketch)
 
-- Account administration (PRD 0.4, decision 12): `accounts.admin_mode`,
-  `devices.role`, `invitations.grants_role`, `POST /v1/devices/{id}/role`, the
-  admin-only checks on revoke and invitation minting, the last-admin invariant,
-  `sund admin account create --admin-mode` and `sund admin device promote`, role
-  in the device-list response, and the two new ping triggers (a role change and
-  an invitation mint must wake the account's other devices; today only
-  registration and revocation do). It also adds a client obligation Sund cannot
-  verify — a client MUST render each device's role and surface administrative
-  changes rather than absorbing the ping — which belongs in "What a client must
-  implement" once roles exist. Nothing of it exists: today every device is
-  effectively an admin, which is exactly PRD 0.4's `flat` mode, so implementing
-  it should be additive rather than a behaviour change for existing deployments
-  (an existing database migrates to `flat`).
 - Pinned TLS is opt-in, not the default: plain HTTP remains the flagless default
   and the container/compose still serve HTTP. Making pinned TLS the self-host
   default (and enabling it in the image) is a follow-up. Client pinning is proven
@@ -397,7 +401,9 @@ server API.
 
 Code map
 
-    main.go                 CLI: serve, admin account create, health, version;
+    main.go                 CLI: serve, admin account create (--admin-mode),
+                            admin device quota, admin device promote,
+                            health, version;
                             env-var config (SUND_ADDR/SUND_DB)
     Dockerfile, compose.yaml, .env.example
                             container image (distroless static, multi-arch) and a

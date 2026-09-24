@@ -66,9 +66,9 @@ Operator surface (the Holm bar):
                                                    every device, like any other
                                                    role change
     sund admin device quota <device-id> [<bytes>]→ per-device storage ceiling
-                                                   (PRD 0.5); 0 removes it,
+                                                   (PRD 0.8); 0 removes it,
                                                    omitted shows it; a change
-                                                   pings the account
+                                                   pings only the capped device
     cp sund.db backup/                            → backup
     mv sund-new sund && systemctl restart sund    → upgrade
 
@@ -182,10 +182,12 @@ a storage-ceiling change — pings the devices that can observe its effect: for 
 first four that is every device in the account except the one that performed it,
 not only the admins and never silently; for a ceiling change it is the single
 device being capped, which is the only device that can read the result
-(PRD 0.8, decision 16). The two acts the operator
-performs rather than a device, `sund admin device promote` and
-`sund admin device quota`, have no actor to exclude and so ping *every* device
-(PRD → Devices). Two consequences a client implementer needs. A
+(PRD 0.8, decision 16). `sund admin device promote` is performed by the operator
+rather than by a device, so it has no actor to exclude and pings *every* device
+(PRD → Devices). Three consequences a client implementer needs. Because a ceiling
+is no longer in the device list, the refetch rule includes `GET /v1/me/quota`:
+refetch the device list, the invitation list and the quota read on **any** ping,
+or a ceiling change is undetectable. A
 revocation pings its *target* as well, which means the ping goes out before the
 target's push endpoint is cleared, in the same step — best-effort, so an
 unreachable device learns from its next request instead. And since a ping carries
@@ -437,10 +439,11 @@ network, no disk beyond in-memory SQLite. Covers the invariants testable in isol
   ceiling; and `GET /v1/me/quota` returns the caller's own ceiling and stored
   bytes — a device can always tell being capped from being full
 - the two leaks a later convenience would reintroduce, asserted rather than
-  assumed: `/v1/me/quota` is self-scoped and its response carries no
-  account-level figure (an account-wide stored-bytes number readable by every
-  member is a peer activity signal), and the device-list response carries
-  ceilings but never usage
+  assumed: `/v1/me/quota` is self-scoped and its response carries no account
+  *stored bytes* (a number readable by every member is a peer activity signal;
+  the account ceiling is permitted), and the device-list response carries neither
+  a ceiling nor usage for any device, the caller's own included — a peer's
+  ceiling is not a member's to read (PRD 0.8, decision 16)
 - message TTL expiry and deletion-unread
 - revocation kills the identity key and owned queues in one step
 - administration: the admin-only acts refused for a member in a managed account

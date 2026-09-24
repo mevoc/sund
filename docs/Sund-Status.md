@@ -209,11 +209,34 @@ cannot enumerate who-messages-whom from the schema (no stored sender↔recipient
 link). First-connect MITM is addressed by the pinned-TLS mode (see Transport
 security). Replay is blocked by nonce+timestamp.
 
-Not hidden (a host can observe): traffic timing and sizes; queue ownership
-(recipient side); the push-ping fan-in (which device is woken when a queue
-receives); on iOS, wake timing at the vendor gateway and Apple. In a small account
-the anonymity set is small — Sund does not claim traffic-analysis resistance; it
-guarantees the graph is not *recorded*. Consuming apps must state this honestly.
+Not hidden, by observer. The PRD's threat model carries the full list with what
+each item *enables*; this is the as-built subset, which is what a consumer's
+privacy documentation has to describe today.
+
+- **A host** observes: traffic timing and sizes; queue ownership (recipient
+  side); the push-ping fan-in (which device is woken when a queue receives); who
+  acted on whom in live management traffic; on iOS, wake timing additionally
+  reaches the vendor gateway and Apple. In a small account the anonymity set is
+  small — Sund does not claim traffic-analysis resistance; it guarantees the
+  graph is not *recorded*.
+- **Any device in the account** observes, from `GET /v1/devices`: every peer's
+  `public_key`, `push_endpoint`, `capabilities`, `created`, `last_seen` and
+  whether it is revoked. Two of those are worth naming to a privacy writer.
+  `push_endpoint` is a peer's wake-up URL, which on a bearer-URL distributor such
+  as a default ntfy topic is a capability to wake or spam that device, outside
+  Sund and beyond revocation. `last_seen` updates on authenticated
+  *management-plane* requests only — the transport plane leaves it alone — but
+  since clients refetch the device list on every ping, and a ping fires on
+  message arrival, it approximates when a peer's client last woke.
+- **A sender**, who may hold no account at all, observes: whether a send is
+  refused for storage (507), which is a coarse oracle on the recipient's
+  headroom; and whether a queue is gone (404) versus live (401). The second needs
+  no credential, because the queue is resolved before the signature is checked,
+  so anyone who has ever seen a sender id can use it as a liveness monitor on
+  that queue — and revocation retires a device's queues, so that includes
+  learning that the owner was revoked.
+
+Consuming apps must state this honestly.
 
 Trust boundary: every non-revoked device in an account is trusted equally — as
 built, that includes the administrative acts (revoking a device, minting an

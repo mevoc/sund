@@ -146,8 +146,11 @@ Devices
   destroys nothing), so the fastest possible response to a mis-shared QR is worth
   more than the ability of a hostile member to be obstructive.
 - Explicit device list: every device in an account can see all registered devices
-  (id, role, created, last_seen, capabilities — not quota_bytes, see Storage
-  quota). Revocation is a first-class
+  (id, public_key, role, push_endpoint, capabilities, created, last_seen and
+  whether it is revoked — but not quota_bytes, see Storage quota). What that
+  exposes between peers is listed under Threat model → residual metadata;
+  `push_endpoint` in particular is a capability, not just a fact. Revocation is a
+  first-class
   operation; a revoked device's identity key and queue access die immediately,
   and its undelivered messages are dropped along with its queues. Revocation is
   destructive and has no undo — part of why an account may want it gated.
@@ -167,9 +170,14 @@ Devices
   unreachable target learns instead from its next request, which fails closed, and
   a consumer that promises a removed device will be told cannot rely on the ping
   alone. Because a ping carries nothing, a woken client cannot know *which* act
-  fired it: the rule is to refetch the device list and the invitation list on any
-  ping, not to refetch selectively. Pings are best-effort — clients MUST
-  additionally refetch the device list before establishing any new session or
+  fired it: the rule is to refetch the device list, the invitation list **and
+  `GET /v1/me/quota`** on any ping, not to refetch selectively. The quota read
+  joined that rule in 0.8 and is load-bearing, not tidiness: once a ceiling left
+  the device list (decision 16), a ceiling change became the one administrative
+  act a conforming client could not otherwise detect — it would refetch both
+  lists, find nothing changed, and learn nothing. Pings are best-effort —
+  clients MUST additionally refetch the device list before establishing any new
+  session or
   pairing, so a missed ping costs latency, never security.
 - Roles and administration: each device holds a role, `admin` or `member`. The
   account's administration mode decides which role a *newly registered* device
@@ -332,8 +340,13 @@ Devices
       them, so that a device can explain a refusal it hits while still under its
       own ceiling. Account *stored bytes* MUST NOT appear: a number every member
       could read would be a coarse activity signal about all of its peers
-      combined. Postiljon has an open request for exactly this read (its
-      `docs/deviations.md`, "Quota headroom cannot be reported").
+      combined. Be precise about what that withholds, though — a member holding
+      one sender id can probe the account ceiling's boundary and subtract, so the
+      MUST NOT denies a convenient read rather than an unreachable fact. It is
+      worth keeping for the same reason a locked door is worth keeping next to an
+      openable window: the cost of the alternative route is the point. Postiljon
+      has an open request for exactly this read (its `docs/deviations.md`,
+      "Quota headroom cannot be reported").
 
   Quota is **not** in the device list, and the contrast with `role` is the whole
   reason (decision 16). A role is authority *over other devices*, so the devices
@@ -342,10 +355,21 @@ Devices
   confers nothing over anyone, so no peer needs it to protect itself, and no peer
   gains a remedy from seeing it: ceilings are operator-written, so a member who
   disapproves of a peer's ceiling can do nothing about it anyway. Publishing it
-  would have bought no accountability and sold a real capability — a member who
-  reads a peer's ceiling knows exactly how many bytes will silence it, turning a
-  binary search into one probe (Threat model → residual metadata). Self-scoped
-  keeps the accountability and declines the capability.
+  would have sold a real capability: a member who reads a peer's ceiling knows
+  the silencing cost with *no* probes at all, can rank peers by how cheap each is
+  to silence, and with a single probe learns the target's absolute stored bytes
+  rather than only whether it moved (Threat model → residual metadata).
+
+  The trade, stated rather than waved through, because publishing did buy one
+  thing: a *third-party witness*. Under 0.5 any peer could see that a device had
+  been capped to one byte; under 0.8 only that device can, and only if its client
+  implements the self-read — an obligation Sund cannot verify, the same caveat
+  the role model carries. In the deployment this is aimed at, the operator is
+  often a household member, so the witness was not worthless. It is given up
+  because a witness who cannot act is worth less than the targeting capability it
+  costs: a peer can no more change a ceiling than the capped device can, so
+  seeing one produced awareness without recourse, while the capability it handed
+  over was real and one-sided.
 
   A consumer SHOULD surface a ceiling change and a persistent refusal to the
   user rather than retrying quietly; as with the administration model, Sund can
@@ -665,7 +689,10 @@ here enables anything it could not already do):
   so a host watching requests sees the pair even though nothing stores it. The
   management-plane twin of push-ping fan-in — runtime, not recorded. The binary
   keeps no access log (it logs errors only), so the claim holds today at runtime
-  as well as in the schema, but a host that chose to log would learn it.
+  as well as in the schema, but a host that chose to log would learn it. One
+  error path is not content-free: a failed push ping logs the transport error,
+  which carries the device's push endpoint URL. Host-observable only, so it
+  enables nothing the host did not already hold.
 - The account's shape: `admin_mode` says whether an account is flat or managed
   before any device has registered, `role` says which device administers a
   managed account, `grants_role` says at mint time that an account is about to
@@ -677,12 +704,29 @@ Observable by an **account member**, from the device list every member reads.
 These are the items the anti-stalkerware argument turns on, because the observer
 is someone the subject lives with:
 
+- **Every peer's `push_endpoint`** — its UnifiedPush/ntfy URL, verbatim. This is
+  the sharpest item in this section and it is not a disclosure at all.
+  *Enables:* on a default ntfy deployment a topic URL is effectively a bearer
+  capability to wake or spam that device, outside Sund entirely and beyond the
+  reach of revocation, quota or anything else here. A consumer that cannot accept
+  every member holding that over every other must not use a bearer-URL
+  distributor, or must not put the endpoint in a shared account's device list.
+  Sund publishes it because a client needs a peer's endpoint for nothing — which
+  means this is a field the list could lose; see the open decisions.
 - **`last_seen` for every peer** — when each device last made an authenticated
-  request. This is a presence signal, updated on essentially every interaction,
-  and it is the sharpest thing one family member learns about another here.
-  *Enables:* timing. Knowing when a device is not checking in is knowing when a
-  flood will sit longest before its owner notices, and when an administrative
-  act will go unseen for longest.
+  *management-plane* request. The transport plane does not touch it: draining,
+  acking and sending leave it unchanged. But because clients MUST refetch the
+  device list on every ping, and a ping fires on every message arrival, a peer's
+  `last_seen` approximates *when a message last arrived for that device and its
+  client woke* — a sharper presence signal than "last checked in", and a side
+  effect of the mandatory-refetch rule rather than a deliberate feature.
+  *Enables:* timing — knowing when a peer's client last woke is knowing when it
+  is not watching, which is when an administrative act or a flood goes longest
+  unnoticed.
+- **Every peer's `public_key` and whether it is `revoked`** — the first is public
+  key material and is the point of the list; the second, with `last_seen`, tells
+  every member exactly when a peer was removed and when it was last active before
+  that. *Enables:* little beyond what the removal itself already broadcasts.
 - **`role` for every peer** — who may revoke, invite and promote in a managed
   account. Published deliberately: authority over other devices must be visible
   to the devices it is held over (Administration). *Enables:* target selection —
@@ -710,23 +754,38 @@ member, or may hold no account on the server at all (decision 15):
   *Enables:* a coarse oracle, and confirmation of a flood. A sender holding a
   queue's live send credential — its sender ID, and on a bound queue the bound
   key — can send minimum-size payloads to binary-search the remaining headroom,
-  and poll to watch headroom return, learning roughly when the recipient drained
-  (so, when it was last online) or when its messages expired. Sizes and timing
-  are listed above as visible to the host; this exposes a coarse version of them
-  to a sender too. Against the 64 MiB account ceiling the search was expensive
-  and noisy; against a small device ceiling it is cheap. It is a search, though,
-  and that is deliberate: publishing the ceiling in the device list would have
-  collapsed it to a single probe for any account member, which is why decision 16
-  withholds it. Nothing here reveals payload content, another queue, or who else
-  is in the account.
+  and poll to watch headroom return, learning roughly when the recipient *acked*
+  (headroom returns on ack, not on drain — a drain removes only expired rows) or
+  when its messages expired. Sizes and timing are listed above as visible to the
+  host; this exposes a coarse version of them to a sender too. Against the 64 MiB
+  account ceiling the search was expensive and noisy; against a small device
+  ceiling it is cheap.
+
+  Three things sharpen or blunt that, all worth stating. The account ceiling is
+  one of the two tripwires and sums across *every* device in the account, so a
+  probe that trips it reports aggregate state about the recipient's peers, not
+  just the recipient — the reason the refusal must not name which level tripped
+  is to stop a sender resolving which of the two it hit, not to hide that account
+  state is involved at all. Probing is self-consuming: each probe stores the
+  bytes it measures, so it is indistinguishable from a small flood and cannot be
+  repeated indefinitely without becoming one. And it remains a *search*
+  deliberately: publishing a ceiling in the device list would have given a member
+  the silencing cost with zero probes and let it rank peers by how cheap each is
+  to silence, which is why decision 16 withholds it. Nothing here reveals payload
+  content, another queue, or who else is in the account.
 - **A 404 on a queue that is gone** — retired by its owner, or belonging to a
   device that was revoked, since revocation retires that device's queues. The
   first is a designed signal: a stale sender must learn to fetch a new address
   (Queues → Rotation). The second is the awkward one — a management-plane fact
-  becomes visible to a party who may hold nothing but a bearer sender credential.
-  *Enables:* little directly; it is listed because it is the one place a
-  management event reaches outside the account, and a consumer reasoning about
-  what a departed peer can infer should know it.
+  becomes visible outside the account. Note the scope precisely, because it is
+  wider than "a sender holding credentials": the queue is resolved *before* the
+  signature is checked, so an unsigned request already distinguishes 404 (gone)
+  from 401 (live, wrong key). *Enables:* a permanent, credential-free liveness
+  monitor for anyone who has ever seen the sender id — including a peer whose
+  access was revoked, who can from then on tell whether the owner device is
+  still enrolled. It is the one place a management event reaches a party the
+  account has ejected, and a consumer reasoning about what a departed member can
+  infer should know it.
 
 Observable by the **vendor push gateway and Apple**, on iOS only:
 
@@ -782,16 +841,33 @@ a multi-client stack meets them in one place:
   other's senders draw on, so a flood aimed at one silences the other. Per-device
   ceilings (decision 13) are the containment for exactly this, and a multi-client
   account is the deployment that most needs them set.
+- **Enrolment reaches every device too, and this is the worst of the four.** In a
+  flat account any device may mint an invitation, so compromise of an
+  internet-facing component enrols an attacker's device into the account —
+  permanently, and with all the powers above. Revocation is loud and recoverable;
+  a quietly enrolled peer is neither. A component that terminates untrusted input
+  is exactly the one that should not be able to invite.
 - **Every non-revoked device is trusted equally**, and the device list is visible
-  to all of them. This is stated for peers in a family account; it applies just
-  as much to a service account holding two components of unequal privilege.
-  Neither the platform nor the account boundary makes the credential-holder more
-  trusted than its neighbour, or less.
+  to all of them — including, today, every peer's push endpoint. This is stated
+  for peers in a family account; it applies just as much to a service account
+  holding two components of unequal privilege. Neither the platform nor the
+  account boundary makes the credential-holder more trusted than its neighbour,
+  or less.
+
+Two caveats on the remedies, so this section does not recommend what does not
+exist. `managed` mode (decision 12) narrows revocation and minting to admins and
+is the right shape for a service account — the components are not people and
+there is nobody to trap — but the mode is fixed at provisioning, so it is a
+choice at account creation and not a fix an existing deployment can adopt.
+Per-device ceilings (decision 13) are the containment for the shared-quota cost.
+**Neither is implemented** (`Sund-Status.md` → "Not built yet"), so a stack
+deploying today carries all four costs undiminished.
 
 The honest answer to "should two components share an account?" is "yes, with
-those three costs" — and a consumer that cannot accept them should run separate
-accounts, which the transport plane permits (decision 15) at the price of losing
-the shared device list and shared revocation that made one account attractive.
+those four costs, and provision the account managed if you can" — and a consumer
+that cannot accept them should run separate accounts, which the transport plane
+permits (decision 15) at the price of losing the shared device list and shared
+revocation that made one account attractive.
 
 Trust boundary — the account. Sund has no notion of which member may see or talk
 to which: the device list is visible to all members, and reachability between them
@@ -1090,8 +1166,12 @@ stack lock and the second transport-trust mode. Item 12 came in 0.4, item 13 in
     are operator-written, so no peer gains a remedy from seeing one; and the
     accountability that publishing was meant to buy — a capped device knowing it
     was capped — is delivered entirely by `GET /v1/me/quota`. What publishing did
-    buy was a capability: a member who reads a peer's ceiling turns the
-    refused-send binary search into a single probe. So the ceiling leaves the
+    buy was a capability: a member who reads a peer's ceiling knows the silencing
+    cost with no probes at all, can compare peers for the cheapest to silence,
+    and with one probe learns the target's absolute stored bytes. It also bought
+    a third-party witness to an operator's capping act, which is a real loss and
+    is argued as a trade under Storage quota rather than dismissed. So the
+    ceiling leaves the
     device list, a ceiling change pings only the device it affects, and
     `/v1/me/quota` stays self-scoped — it may carry the account ceiling, a
     constant that binds everyone equally, and never account stored bytes.
@@ -1119,6 +1199,18 @@ Open decisions remaining
    consumer has yet asked for administration that survives a hostile host.
    Deferred, not rejected: 0.4's model is a mistake-and-member defence and says
    so.
+3. Whether `push_endpoint` belongs in the device-list response. Surfaced by
+   writing the residual-metadata list against the code in 0.8: every member reads
+   every peer's wake-up URL, and on a default ntfy deployment that URL is a
+   bearer capability to wake or spam that device — outside Sund, and beyond the
+   reach of revocation or quota. It is the only *capability* in the member-visible
+   set, and no client obviously needs a peer's endpoint: pings are the server's
+   to send, and pairing carries what a peer needs out of band. Two ways to close
+   it, both cheap: drop the field from the response, or keep it and say in the
+   Pinning-Contract-style normative voice that a consumer using bearer-URL
+   distributors must not share an account across parties that must not wake each
+   other. Open because it is a wire-format change and this revision is
+   documentation; raised here rather than folded in quietly.
 
 Resolved since first listed as open (no longer decisions):
 

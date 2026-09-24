@@ -1,7 +1,7 @@
 # Sund — deviations from the PRD and implementation guide
 
-Where the code, the guide or an issue departs from `Sund-PRD.md` (v0.7) or
-`Sund-ImplementationGuide.md` (v0.5), it is recorded here at the time the departure
+Where the code, the guide or an issue departs from `Sund-PRD.md` (v0.8) or
+`Sund-ImplementationGuide.md` (v0.6), it is recorded here at the time the departure
 is made. Open entries are the agenda for the next spec revision; a revision closes
 them by updating `Status`. Format and rules: `~/projects/CLAUDE.md`, *Design flow*.
 
@@ -224,3 +224,29 @@ CI). Those are tracked in `Sund-Status.md` → "Not built yet".
   decision. The fix family-beacon proposes: amend Sund's wording to "against the
   consumer's own membership record, where it has one", keeping the device list as
   the fallback for a consumer that has none. Not blocking either side.
+
+## 2026-09-23 — A revoked device is never pinged, though the PRD says it is
+
+- Spec: `Sund-PRD.md` → Devices → Device-list change propagation — "A revocation
+  pings its target too — it is a device the act was performed on, and the one
+  with most reason to be told — so the ping is attempted *before* the target's
+  push endpoint is cleared, in the same step".
+- Actual: it is not attempted at all. `handleRevoke` calls
+  `wakeAccountDevices(caller.AccountID, targetID)`, which skips the target by id
+  (`internal/server/push.go`), and in any case `RevokeDevice` has already cleared
+  `push_endpoint` inside its transaction, so the loop's `d.PushEndpoint == ""`
+  guard would skip it a second time. The revoked device learns only from its next
+  request, which fails closed.
+- Why: the wake helper existed to tell an account's *other* devices to refetch,
+  and revocation reused it. The PRD sentence was written later (0.4, when the
+  propagation rule was sharpened) and describes the intent rather than the code.
+- Status: open, and surfaced by the privacy gate on PRD 0.8 rather than by a
+  consumer. It matters because family-beacon's roster spec requires that "the
+  removed device is told, when it is reachable" and the PRD's own
+  anti-stalkerware argument leans on the act being visible to the device it is
+  exercised over. Two ways to close it: ping the target before clearing its
+  endpoint, which is the order the PRD already describes and a small change to
+  `handleRevoke`; or drop the sentence and state that a revoked device learns
+  from its next failed request, which is the weaker promise the code makes today.
+  Recommend the first — the PRD reasoned its way to the right behaviour and only
+  the implementation is missing, the same shape as the pre-commit hook.

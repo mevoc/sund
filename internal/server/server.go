@@ -10,6 +10,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"log"
 	"net"
 	"net/http"
 	"time"
@@ -145,4 +146,33 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+// PurgeInterval is how often the background sweeper deletes expired messages.
+// A drain already purges the queue it touches, so the sweeper exists only for
+// queues nobody visits; hourly is frequent enough for that and cheap enough to
+// run on a device with one CPU.
+const PurgeInterval = time.Hour
+
+// RunPurgeLoop deletes expired messages until ctx is cancelled. It is a
+// goroutine, not a service: no new process, no scheduler, nothing to configure —
+// the Holm bar survives it.
+func (s *Server) RunPurgeLoop(ctx context.Context) {
+	t := time.NewTicker(PurgeInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			n, err := s.store.PurgeExpired(ctx)
+			if err != nil {
+				log.Printf("purge expired: %v", err)
+				continue
+			}
+			if n > 0 {
+				log.Printf("purged %d expired messages", n)
+			}
+		}
+	}
 }

@@ -101,6 +101,10 @@ func runServe(args []string) error {
 	pinger := push.NewUnifiedPush(&http.Client{Timeout: 10 * time.Second})
 	srv := server.New(server.Config{Version: version, Pinger: pinger}, st)
 
+	// Sweep expired messages from queues nobody drains. A drained queue purges
+	// itself; this is what keeps "it stores briefly" true for abandoned ones.
+	go srv.RunPurgeLoop(ctx)
+
 	if *tlsDir != "" {
 		id, err := tlsid.Load(*tlsDir)
 		if err != nil {

@@ -1,6 +1,6 @@
 # Sund — deviations from the PRD and implementation guide
 
-Where the code, the guide or an issue departs from `Sund-PRD.md` (v0.10) or
+Where the code, the guide or an issue departs from `Sund-PRD.md` (v0.11) or
 `Sund-ImplementationGuide.md` (v0.7), it is recorded here at the time the departure
 is made. Open entries are the agenda for the next spec revision; a revision closes
 them by updating `Status`. Format and rules: `~/projects/CLAUDE.md`, *Design flow*.
@@ -45,9 +45,13 @@ CI). Those are tracked in `Sund-Status.md` → "Not built yet".
   implementable without the recipient also choosing the sender's key. The guide
   (API sketch → "Queue security follows the SimpleX pattern") already describes
   first-SEND binding, and the PRD declares itself normative where they disagree.
-- Status: open. Fold the guide's wording into the PRD's Queues section. Note the
-  consequence for the threat model: an open queue can be claimed by whoever first
-  presents its sender ID, so the sender ID is a bearer secret until bound.
+- Status: folded into `Sund-PRD.md` v0.11 (decision 19). Queues now says the
+  recipient key is supplied at creation and the sender key is bound by the first
+  valid SEND, with the reason it cannot be otherwise — the recipient mints the
+  queue before it knows anything about its peer. The threat-model consequence is
+  stated in the same place rather than left implicit: until a queue is bound its
+  sender ID is a bearer secret, which is what makes the QR ceremony load-bearing
+  and why a misdirected sender ID is worth retiring rather than reusing.
 
 ## 2026-09-18 — Wake-up pings carry a priority hint
 
@@ -110,8 +114,20 @@ CI). Those are tracked in `Sund-Status.md` → "Not built yet".
 - Why: per-queue lazy purge needs no timer and is correct from the client's point
   of view (an expired message is never delivered). `Sund-Status.md` states the
   behaviour.
-- Status: open. Either add a periodic sweep (a few lines with a ticker) so the
-  "stores briefly" promise holds for abandoned queues too, or qualify the PRD.
+- Status: closed 2026-09-24 by building the sweep, not by qualifying the PRD.
+  `Store.PurgeExpired` deletes expired rows across all queues and
+  `Server.RunPurgeLoop` calls it hourly, started as a goroutine by `serve` and
+  cancelled with the server's context. A drained queue still purges itself, so
+  the sweep exists only for queues nobody visits.
+
+  Chosen over qualifying because "it stores briefly (TTL)" is a privacy promise,
+  and retracting one to match the code should be the last resort rather than the
+  cheap option — the opposite call from the cross-account entry, where the code
+  was right and the spec was wrong. Here the spec was right and the code was
+  incomplete. Cost: one goroutine and a ticker, no new process, nothing to
+  configure. Pinned by
+  `TestPurgeExpiredClearsAbandonedQueues`, which asserts an unattended queue's
+  expired row goes while a live one in another queue stays.
 
 ## 2026-09-18 — Guide: "who may revoke" is not a capability flag in Sund
 

@@ -56,12 +56,16 @@ intent.
 
 ## Docs
 
-- `docs/Sund-PRD.md` — **current (v0.13).** Two-plane architecture, pseudonymous
+- `docs/Sund-PRD.md` — **current (v0.14).** Two-plane architecture, pseudonymous
   queues, device list/revocation/key bundles, push architecture (UnifiedPush/ntfy
   on Android; vendor APNS gateway on iOS — pluggable provider interface),
   fingerprint-pinned server address, one-binary stack requirement. **Pinned TLS
   is the flagless default** since 2026-09-24 — `serve` generates its own CA on
   first run; `--http` / `SUND_HTTP` opts out for WebPKI behind a proxy. New in
+  0.14: **which authority a client verifies a blob against** (decision 22) — the
+  device list is host-writable, so a bundle or statement must be verified against
+  the consumer's own membership record where it has one. An open deviation said
+  so from 2026-09-21 and two revisions were written past it. In
   0.13: **administrative statements** (decision 21) — an append-only per-account
   log of opaque blobs, so a peer can verify an act against the device list
   instead of trusting the server. The blob is signed *and encrypted*: plaintext
@@ -133,9 +137,11 @@ intent.
   per-commit test strategy (unit + system suites, blindness audit), and the
   stack lock, July 2026: Go + SQLite (family-beacon
   ARCHITECTURE.md updated to match). Remaining open: iOS gateway operations,
-  signed administrative statements. (Blob storage and queue rotation are
+  and nothing else — signed administrative statements landed in 0.13 and their
+  verification authority was corrected in 0.14. (Blob storage and queue rotation
+  are
   resolved — see the PRD's "Resolved since first listed as open".)
-- `docs/Sund-ImplementationGuide.md` — companion to PRD 0.9: components, API
+- `docs/Sund-ImplementationGuide.md` — **v0.9**, companion to PRD 0.14: components, API
   sketch (two planes), walkthroughs for first-device onboarding and second-device
   invitation (SimpleX-style QR bootstrap), each step mapped to Family Beacon.
   Also the test strategy: unit + system suites (both per-commit), the beaconsim

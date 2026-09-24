@@ -2,7 +2,7 @@ Sund
 
 «A blind strait between your devices.»
 
-Status: PRD v0.13 (Draft) — supersedes PRD 0.12
+Status: PRD v0.14 (Draft) — supersedes PRD 0.13
 
 > Working name: **Sund** (Swedish: a strait between islands — the channel between
 > skerries; also "sound, healthy"). The kernel extracted from Skerry
@@ -179,8 +179,16 @@ Devices
   unreachable target learns instead from its next request, which fails closed, and
   a consumer that promises a removed device will be told cannot rely on the ping
   alone. Because a ping carries nothing, a woken client cannot know *which* act
-  fired it: the rule is to refetch the device list, the invitation list **and
-  `GET /v1/me/quota`** on any ping, not to refetch selectively. The quota read
+  fired it: the rule is to refetch the device list, the invitation list,
+  `GET /v1/me/quota` **and, for an account that uses them, the statement log** on
+  any ping, not to refetch selectively. The log needs the rule more than the
+  others: appending a statement does not ping, so without it a client is never
+  told a statement exists and the feature is unreachable. For the same reason an
+  admin MUST append the statement *before* performing the act it describes — the
+  act's own ping is what wakes the account, and a peer that refetches on it would
+  otherwise race a statement not yet written. A statement whose act has not
+  happened is the safer failure: it is visible as a mismatch against the device
+  list, where the reverse looks like a forged act. The quota read
   joined that rule in 0.8 and is load-bearing, not tidiness: once a ceiling left
   the device list (decision 16), a ceiling change became the one administrative
   act a conforming client could not otherwise detect — it would refetch both
@@ -255,12 +263,16 @@ Devices
   mint an invitation, promote itself — changes nothing, so nothing pings and
   nothing is stored. Recording the attempt would mean recording the actor and its
   target, which is the edge the model exists to avoid. Sund accepts unobserved
-  probing as the price of storing no administration log; a consumer that wants
+  probing as the price of storing no *readable* administration log; a consumer
+  that wants
   failed attempts surfaced has to carry them client-side.
 
   What a member learns is bounded on purpose. It sees the account's current roles
   and is woken whenever they change; it does not learn *which* admin acted, or
-  when. Sund records no actor and no history for an administrative act, because
+  when. Sund records no actor for an administrative act, and since 0.13 keeps a
+  bounded, encrypted history of them only where an account opts into the
+  statement log (Devices → Administrative statements) — never in a form it can
+  read. The reason there is no actor column is that
   an "X revoked Y" row would be precisely the device→device edge the data model
   refuses. The transparency on offer is "you can always see the current
   distribution of power, and you are always told when it moved" — not an audit
@@ -392,9 +404,21 @@ Devices
   the host. A hostile host can fabricate a revocation, and a forged one is enough
   to make honest peers drop a device's queues and re-key. If the acting admin
   signs a statement describing what it did, and peers verify that signature
-  against the device list, the host can no longer *invent* an administrative act
-  — it can only refuse to serve the statements, which is denial of service, a
-  thing it could always do.
+  against the consumer's own membership record, a host can no longer *invent* an
+  administrative act. Verifying against the **device list** would not achieve
+  that, because the host writes the device list — see *Which authority a client
+  verifies against*. What remains available to it either way is refusing to serve
+  the statements, which is denial of service, a thing it could always do.
+
+  A statement must also bind its own position in the log. `seq` and `created` are
+  assigned by the server and cover nothing the client signed, so a host can
+  re-present a genuine, correctly signed statement at a fresh sequence number and
+  a peer that trusted the server's ordering would act on an old revocation as if
+  it were new — dropping queues and re-keying, the exact harm this exists to
+  prevent. So: a statement MUST carry its own ordering inside the signed payload
+  (a counter, or a hash of its predecessor) and a client MUST NOT treat the
+  server's `seq` as anything but a cursor. Without that, this defeats fabrication
+  but not replay.
 
   **The blob must be encrypted by the client, not merely signed**, and this is
   the whole reason the feature took three revisions to arrive. A plaintext signed
@@ -416,10 +440,29 @@ Devices
 
   The cost, which is new: a durable record of administrative *activity* — how
   many statements an account has and when they were written — where the model
-  previously kept none. Bounded rather than unbounded: an account retains its
-  most recent statements up to a cap, oldest dropped, so the window a host can
-  observe is finite and the store cannot grow without limit. Sequence numbers are
-  per account, not global, so one account's log never reveals another's volume.
+  previously kept none. An account retains its most recent 256 statements, each
+  at most 4 KiB, oldest dropped; both constants are part of the contract, because
+  a client cannot size a chain or tell trimming from truncation without them.
+  Sequence numbers are per account, not global, so one account's log never
+  reveals another's volume — but be precise about what the cap does and does not
+  bound. It bounds stored *content* and timestamps. It does not bound the
+  sequence number, which never resets, so the newest `seq` is the account's
+  lifetime count of administrative statements and stays visible to the host and
+  to every member long after the rows are gone.
+
+  Two suppression paths, not one. The host serves the log and can withhold or
+  truncate it. And in a `flat` account every device is an admin, so **any member
+  can roll genuine statements out of the window** by appending 256 of its own —
+  which matters because flat is the default and is what family-beacon requires.
+  The admin gate is not a defence there; it is a defence only in a `managed`
+  account. Routine trimming also produces a head gap indistinguishable from
+  hostile truncation, which is why chaining detects a gap but cannot attribute
+  it.
+
+  Who can read it: every non-revoked device in the account. A revoked device
+  cannot — signed requests from it are refused — so the party a forged revocation
+  harms is the one party unable to check the statement about it. Its peers can,
+  which is where the defence actually lives.
 - Key bundles: each device may publish a small, size-capped, opaque blob of
   client-side key material (e.g. prekeys for X3DH-style async session setup),
   retrievable by other devices in the account. The server never interprets it —
@@ -427,8 +470,10 @@ Devices
   a new device can pair with an *offline* peer by fetching its bundle, instead of
   needing a co-present QR ceremony with each one. Bundles are self-authenticating
   to clients — signed by the publishing device's identity key and verified by the
-  fetcher against the device list — so a malicious host cannot substitute a forged
-  bundle even though Sund serves it without checking.
+  fetcher **against the consumer's own membership record where it has one**, and
+  only against the device list where it has none. That distinction is
+  load-bearing and was wrong in every revision before 0.14; see *Which authority
+  a client verifies against*, below.
 
   One-time prekeys create a tension worth stating. Strict X3DH forward secrecy
   wants each one-time prekey used once, which a classic prekey server enforces by
@@ -460,6 +505,35 @@ Devices
       spammable — by every other (see Threat model → Trust boundary).
   Neither needs a server change; the lever is entirely the consumer's bundle
   format, which is another reason Sund leaves that format to the consumer.
+
+Which authority a client verifies against. Sund serves two kinds of
+self-authenticating blob — key bundles and administrative statements — and for
+both, the question "whose signature counts?" decides whether the blob resists a
+hostile host at all.
+
+**The device list is not that authority.** The server writes it: a host can
+insert a device row carrying a key it controls, and any blob signed with that key
+then verifies against the list. A client that verified this way would accept a
+host-injected device's bundle, and would accept an administrative statement the
+host manufactured — which is precisely the adversary both features name.
+
+So the rule, for bundles and statements alike: **verify against the consumer's
+own membership record, where it has one.** A record admitted end-to-end — a
+signed vouch from an existing member, carried in the consumer's own protocol —
+is not writable by the host, and is the thing a signature should chain to. The
+device list stays authoritative for what it can be: locating key material,
+revocation, and the fallback for a consumer that keeps no membership record of
+its own, which should understand that it is trusting the host not to inject.
+
+This was wrong in the PRD from 0.2 until 0.14, and family-beacon found it rather
+than Sund: its roster verifies against a vouched `identity_pk` and states that
+"the server's device list is not the authority on membership. When the two
+disagree, the roster wins." It was recorded as an open deviation on 2026-09-21
+and then — the failure worth naming — decision 21 was written in 0.13 on the
+same flawed premise, extending the mistake to a second feature instead of
+closing it. A consumer that already keeps an end-to-end ledger of administrative
+acts, as family-beacon does, does not need the statement log at all; the log is
+for consumers that have no such ledger.
 
 Queues
 - A queue is a unidirectional channel owned by one recipient device, created by
@@ -805,6 +879,14 @@ here enables anything it could not already do):
   error path is not content-free: a failed push ping logs the transport error,
   which carries the device's push endpoint URL. Host-observable only, so it
   enables nothing the host did not already hold.
+- The statement log's shape, where an account uses one: how many administrative
+  statements it holds, when each was written, and — because sequence numbers
+  never reset — how many it has ever written. The blobs are ciphertext, so the
+  host learns activity, not content. This is the first durable record of
+  administrative activity in the system; before 0.13 there was none.
+  *Enables:* little directly, but it is a rate signal about an account's internal
+  churn that outlives the acts themselves, and it is the one thing the retention
+  cap does not bound.
 - The priority hint on a ping. A send may mark itself urgent, and the server
   forwards that as an opaque flag. So a host sees, per wake-up, whether the
   sender called it urgent — and in a consumer that reserves urgency for one thing,
@@ -844,6 +926,10 @@ is someone the subject lives with:
   *Enables:* timing — knowing when a peer's client last woke is knowing when it
   is not watching, which is when an administrative act or a flood goes longest
   unnoticed.
+- **The account's statement log**, where one is used: every device reads it, so
+  every device sees the count and timing of administrative acts even if it cannot
+  decrypt a given blob. *Enables:* the same rate signal the host gets, inside the
+  account.
 - **Every peer's `public_key` and whether it is `revoked`** — the first is public
   key material and is the point of the list; the second, with `last_seen`, tells
   every member exactly when a peer was removed and when it was last active before
@@ -1421,14 +1507,31 @@ stack lock and the second transport-trust mode. Item 12 came in 0.4, item 13 in
     keeps it out of that. Optional throughout — an account that writes no
     statements is unaffected, and decision 12's gates do not depend on it.
 
-    Honest limits. It defeats forgery, not suppression: the host serves the log
-    and can withhold or truncate it, and a client cannot tell that from an
-    account where nothing happened. Chaining makes a mid-log gap detectable;
-    tail truncation is not, by any server-stored log. And the cost is real — a
-    durable record of administrative *activity*, count and timing, where the
-    model previously kept none. Bounded by a per-account retention cap so the
-    observable window is finite, with per-account sequence numbers so one
-    account's log never reveals another's volume.
+    Honest limits, three of them corrected in 0.14 after a post-merge review
+    found them overstated. It defeats *fabrication*, and only once verification
+    moves to the consumer's membership record (decision 22) — against the device
+    list it defeats nothing, because the host writes that list. It does not
+    defeat *replay* unless the statement binds its own ordering, now required,
+    since `seq` and `created` are the server's and cover nothing the client
+    signed. It does not defeat *suppression*: the host can withhold or truncate,
+    and in a flat account so can any member, by appending 256 statements of its
+    own. The cost is a durable record of administrative activity — count, timing,
+    and a never-resetting sequence number disclosing an account's lifetime total
+    — bounded in content by the 256 x 4 KiB cap but not in volume.
+22. Which authority a client verifies a blob against. Key bundles and
+    administrative statements are both self-authenticating blobs Sund serves
+    without checking, and from 0.2 until 0.14 the PRD told a client to verify
+    them "against the device list". That is the one authority that cannot serve:
+    the server writes the device list, so a host can insert a row carrying a key
+    it controls and sign a blob that verifies perfectly. Every revision repeated
+    it, and decision 21 built a security claim on it in 0.13 — while an open
+    deviation dated 2026-09-21 already said it was wrong, raised by family-beacon
+    rather than found here. Corrected: verify against the consumer's own
+    membership record where it has one, admitted end-to-end and therefore not
+    host-writable; the device list remains the fallback for a consumer that keeps
+    none, which is then trusting the host not to inject. Recorded as much as a
+    process note as a technical one — the deviations file existed, said this, and
+    revisions were written past it twice.
 
 Open decisions remaining
 

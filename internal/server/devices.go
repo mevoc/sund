@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/mevoc/sund/internal/push"
 	"github.com/mevoc/sund/internal/store"
 )
 
@@ -82,6 +83,11 @@ func (s *Server) handleRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Capture the target's wake-up endpoint before revoking: RevokeDevice clears
+	// it inside its transaction, and wakeAccountDevices skips revoked devices and
+	// empty endpoints, so after this point there is nothing left to ping with.
+	targetEndpoint := target.PushEndpoint
+
 	if err := s.store.RevokeDevice(r.Context(), targetID); err != nil {
 		log.Printf("revoke: %v", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
@@ -91,6 +97,17 @@ func (s *Server) handleRevoke(w http.ResponseWriter, r *http.Request) {
 	// Device-list change: wake the account's other devices so they refetch,
 	// drop the revoked device's queues, and rotate/re-key their own.
 	s.wakeAccountDevices(caller.AccountID, targetID)
+
+	// And wake the target itself. It is the device the act was performed on and
+	// the one with most reason to be told, and family-beacon's roster spec
+	// requires that a removed device is told when it is reachable. Best-effort
+	// like every ping: an unreachable target learns from its next request, which
+	// fails closed. Normal priority deliberately — the urgency hint is a
+	// disclosure (PRD, decision 18) and being revoked does not warrant spending
+	// it.
+	if targetEndpoint != "" {
+		s.dispatchPing(targetEndpoint, push.Normal)
+	}
 
 	writeJSON(w, http.StatusOK, map[string]bool{"revoked": true})
 }

@@ -48,7 +48,9 @@ intent.
   [FamilyBeacon-Protocol.md](https://github.com/mevoc/family-beacon/blob/main/docs/FamilyBeacon-Protocol.md)
   (Layering). Family Beacon's is Rust; the **Go** implementation of the
   transport half (address modes, signing, both planes; no payload crypto) lives
-  here in `client/` and is what `../postiljon` builds on.
+  here in `client/` and is what `../postiljon` builds on. It covers every v1
+  route as of 2026-09-24, including roles, all three quota levels and the
+  administrative statement log.
 - Supersedes the Layer-1 subset of
   `../skerry/docs/FamilyBeacon-MicroCloud-0_5.md`.
 

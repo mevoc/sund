@@ -24,7 +24,7 @@ At a glance
   (account, device, queue — decisions 13, 16, 17), and the account
   administration model (flat/managed accounts and device roles, decision 12).
 - Tests: a Go unit suite and a Python system suite (`beaconsim`) that drives the
-  real compiled binary with real crypto. 86 Go tests (102 with subtests) and
+  real compiled binary with real crypto. 89 Go tests (105 with subtests) and
   67 system tests, both
   per-commit. Includes the blindness audit (S8) and operator-survival (S9).
 - Not yet built: iOS push provider, metrics. TLS/fingerprint pinning is
@@ -336,9 +336,12 @@ What a client (sund-client) must implement
 
 `client/` is the Go implementation of the contract (importable as
 `github.com/mevoc/sund/client`; first consumer: Postiljon), and
-`tests/beaconsim/` is the Python reference the system suite drives. A
-production client (family-beacon's Android/iOS/web) implements the same
-contract:
+`tests/beaconsim/` is the Python reference the system suite drives. `client/`
+covers every route the server exposes, including the ones a managed account
+needs (`CreateInvitationAs`, `SetRole`), the two quota calls a client may make
+(`Device.Quota` for its own ceiling and usage, `Recipient.SetQuota` for its own
+queue) and the statement log (`AppendStatement`, `Statements`). A production
+client (family-beacon's Android/iOS/web) implements the same contract:
 
 1. Device identity: generate an Ed25519 keypair; the private key never leaves the
    device.
@@ -438,7 +441,9 @@ Code map
       quota.go              quota classes
     internal/sigauth/       canonical signing string + header names
     client/                 Go client: address parsing (both trust modes),
-                            request signing, Device / Recipient / Sender
+                            request signing, Device / Recipient / Sender.
+                            Covers every v1 route: roles, all three quota
+                            levels, administrative statements
     internal/push/          Pinger interface, UnifiedPush, Noop
     tests/beaconsim/        reference client (Python)
     tests/                  system suite (pytest)

@@ -197,8 +197,12 @@ device being capped, which is the only device that can read the result
 rather than by a device, so it has no actor to exclude and pings *every* device
 (PRD → Devices). Three consequences a client implementer needs. Because a ceiling
 is no longer in the device list, the refetch rule includes `GET /v1/me/quota`:
-refetch the device list, the invitation list and the quota read on **any** ping,
-or a ceiling change is undetectable. A
+refetch the device list, the invitation list, the quota read **and, for an
+account that uses them, the statement log** on **any** ping, or a ceiling change
+is undetectable and a statement is never seen at all. Appending a statement
+deliberately does not ping — the act it describes already did — which is why a
+statement MUST be written *before* its act, or a peer refetching on the act's
+ping races a statement not yet there and never comes back for it. A
 revocation pings its *target* as well, which means the target's endpoint is
 captured before revocation clears it and the ping is dispatched once the
 revocation commits — so a failed revocation never tells a device it was removed.
@@ -444,6 +448,10 @@ network, no disk beyond in-memory SQLite. Covers the invariants testable in isol
 - queue ID generation: recipient_id and sender_id unrelated, unpredictable
 - sender-key binding on first SEND; rejection of a second binding attempt
 - quota attribution to the owner account; enforcement at the cap
+- administrative statements: per-account sequence numbers (a second account
+  starts at 1), the retention cap trimming oldest-first while keeping the newest,
+  the size cap accepting exactly MaxStatementBytes and refusing one more, and
+  account-scoped reads
 - per-queue quota: the owner sets it with the queue's recipient key and nobody
   else can (a sender key is refused, a device signature is refused); the send
   response never carries remaining headroom at any level; one queue's ceiling
@@ -571,6 +579,14 @@ S10 Quota bulkhead — two devices in one account, each given its own ceiling we
    `GET /v1/me/quota` on the capped device reports the ceiling it was given.
    Then clear that ceiling (0) and assert the device can again consume up to the
    account cap — 0.4 behaviour, unchanged underneath.
+S12 Administrative statements — an admin writes one, a member reads it, and a
+   member cannot write. Assert the log is account-scoped (a second account sees
+   an empty log and its own seq starts at 1), that a statement over 4 KiB is
+   refused and one exactly at the cap is accepted, that a non-base64 or empty
+   body is refused, and that a revoked device can read nothing. Then append past
+   the 256 retention cap and assert the oldest are gone while the newest remain
+   — the head gap a client cannot distinguish from hostile truncation, which is
+   why the cap is part of the contract rather than an implementation detail.
 S11 Per-queue ceiling — one device, two queues, one peer on each. The owner caps
    the first queue with `POST /v1/quota/{recipient_id}` signed by that queue's
    recipient key. Fill it until sends are refused; assert the *second* queue

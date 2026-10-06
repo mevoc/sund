@@ -101,3 +101,59 @@ def test_statements_are_account_scoped(sund_server, new_account):
 
     # B's own log starts at 1, so sequence numbers reveal nothing about A.
     assert b.append_statement(b"b-first").json()["seq"] == 1
+
+
+def test_statement_http_boundaries(sund_server, new_account):
+    """The edges the store tests cannot reach: sizes and bad bodies over the wire."""
+    _, token = new_account()
+    admin = beaconsim.register_device(sund_server.base_url, token)
+
+    # Exactly at the 4 KiB cap is accepted; one byte more is refused.
+    assert admin.append_statement(b"x" * 4096).status_code == 201
+    assert admin.append_statement(b"x" * 4097).status_code == 413
+
+    # An empty statement is not a statement.
+    assert admin.append_statement(b"").status_code == 400
+
+    # Neither is a body that is not base64.
+    import json
+
+    r = admin._request(
+        "POST", "/v1/statements", json.dumps({"statement": "not!base64"}).encode()
+    )
+    assert r.status_code == 400
+
+
+def test_revoked_device_cannot_read_the_log(sund_server, new_account):
+    """The party a forged revocation harms is the one that cannot check it.
+
+    Signed requests from a revoked device are refused, so the defence lives with
+    its peers rather than with the target (PRD 0.14, Administrative statements).
+    """
+    _, token = new_account()
+    admin = beaconsim.register_device(sund_server.base_url, token)
+    other = beaconsim.register_device(
+        sund_server.base_url, admin.create_invitation().token
+    )
+    admin.append_statement(b"opaque")
+
+    assert len(other.list_statements()) == 1
+    admin.revoke_device(other.device_id)
+    assert other.get("/v1/statements/0").status_code == 401
+
+
+def test_retention_cap_over_the_wire(sund_server, new_account):
+    """Trimming leaves a head gap a client cannot tell from hostile truncation,
+    which is why the cap is part of the contract."""
+    _, token = new_account()
+    admin = beaconsim.register_device(sund_server.base_url, token)
+
+    for i in range(260):
+        assert admin.append_statement(f"s{i}".encode()).status_code == 201
+
+    log = admin.list_statements()
+    assert len(log) == 256, f"the log should be capped at 256, got {len(log)}"
+    assert base64.b64decode(log[-1]["statement"]) == b"s259", "the newest must survive"
+    # The sequence number does not reset, so it reports the lifetime total.
+    assert log[-1]["seq"] == 260
+    assert log[0]["seq"] == 5, "the head gap is visible as a non-1 starting seq"

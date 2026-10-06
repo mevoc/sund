@@ -1,7 +1,7 @@
 # Sund — deviations from the PRD and implementation guide
 
-Where the code, the guide or an issue departs from `Sund-PRD.md` (v0.13) or
-`Sund-ImplementationGuide.md` (v0.7), it is recorded here at the time the departure
+Where the code, the guide or an issue departs from `Sund-PRD.md` (v0.14) or
+`Sund-ImplementationGuide.md` (v0.9), it is recorded here at the time the departure
 is made. Open entries are the agenda for the next spec revision; a revision closes
 them by updating `Status`. Format and rules: `~/projects/CLAUDE.md`, *Design flow*.
 
@@ -238,11 +238,12 @@ CI). Those are tracked in `Sund-Status.md` → "Not built yet".
   contract changed. The alternative, defining real statuses, was rejected because
   it means keeping rows past ack, against "it stores briefly (TTL)".
 
-## 2026-09-21 — Key bundles: the PRD names the wrong verification authority
+## 2026-09-21 — The PRD names the wrong verification authority (bundles, then statements)
 
 - Spec: `Sund-PRD.md` → Devices → Key bundles — bundles are "signed by the
   publishing device's identity key and verified by the fetcher against the device
-  list".
+  list". From 0.13, Devices → Administrative statements said the same of a
+  statement log, which is how this entry's scope widened while it sat open.
 - Actual: family-beacon, the first consumer, verifies a fetched bundle against
   its roster's vouched `identity_pk`, not against Sund's device list
   (`../family-beacon/docs/FamilyBeacon-Sessions.md` → "Verifying against the right
@@ -253,11 +254,21 @@ CI). Those are tracked in `Sund-Status.md` → "Not built yet".
   identity key is not. A client that verified against the list would accept a
   host-injected device's bundle, which is the attack family-beacon's roster layer
   exists to prevent. Its implementation is the stronger of the two.
-- Status: open. Raised by family-beacon rather than discovered here, and
-  deliberately left out of the PRD 0.4 and 0.5 revisions to keep each to one
-  decision. The fix family-beacon proposes: amend Sund's wording to "against the
-  consumer's own membership record, where it has one", keeping the device list as
-  the fallback for a consumer that has none. Not blocking either side.
+- Status: folded into `Sund-PRD.md` v0.14 (decision 22), taking exactly the fix
+  family-beacon proposed. A new normative subsection, *Which authority a client
+  verifies against*, states it once for both blob kinds: verify against the
+  consumer's own membership record where it has one, since that is admitted
+  end-to-end and not host-writable; the device list remains the fallback for a
+  consumer keeping none, which is then trusting the host not to inject.
+
+  Worth recording how it aged, because the lesson is about process rather than
+  crypto. The entry was raised by family-beacon on 2026-09-21 and deliberately
+  deferred out of PRD 0.4 and 0.5 to keep each revision to one decision. Then
+  PRD 0.13's decision 21 built an entire security claim — "the host can no
+  longer invent an administrative act" — on the authority this entry already
+  said was wrong, and nobody looked. Deferring an entry is fine; writing a new
+  feature past it is how a known-wrong sentence becomes two. A post-merge review
+  of 0.13 found it.
 
 ## 2026-09-23 — A revoked device is never pinged, though the PRD says it is
 
